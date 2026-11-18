@@ -1,0 +1,13 @@
+{
+  "name": "cerato-obd2",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web app de diagnóstico OBD2 para Kia Cerato 2014 com ELM327 Bluetooth (PWA, sem backend).",
+  "type": "module",
+  "scripts": {
+    "test": "node tools/test/nucleo.test.mjs",
+    "e2e": "node tools/test/e2e-demo.cjs http://127.0.0.1:8765/",
+    "gerar-dtc": "python3 tools/dtc/gerar.py",
+    "servir": "python3 -m http.server 8765"
+  }
+}

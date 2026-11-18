@@ -1,0 +1,159 @@
+// Testes do núcleo (sem navegador): simulador -> ELM327 -> ISO-TP -> OBD -> módulos Kia.
+// Uso: node tools/test/nucleo.test.mjs
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import { SimulatorTransport } from '../../js/transport/simulator.js';
+import { Elm327, parsearMensagens } from '../../js/elm327.js';
+import { Obd, TabelaPids, decodificarDtc } from '../../js/obd.js';
+import { Kia, MODULOS_PADRAO } from '../../js/kia.js';
+
+const raiz = new URL('../../', import.meta.url);
+const tabela = new TabelaPids(JSON.parse(readFileSync(new URL('data/pids.json', raiz))));
+const db = JSON.parse(readFileSync(new URL('data/dtc-db.json', raiz)));
+let ok = 0;
+const teste = async (nome, fn) => {
+  try { await fn(); ok++; console.log('  ✔', nome); } catch (e) { console.error('  ✘', nome, '\n', e); process.exitCode = 1; }
+};
+
+console.log('Decodificação');
+await teste('DTC P0301 / C1201 / B1346 / U0100', () => {
+  assert.equal(decodificarDtc(0x03, 0x01), 'P0301');
+  assert.equal(decodificarDtc(0x52, 0x01), 'C1201');
+  assert.equal(decodificarDtc(0x93, 0x46), 'B1346');
+  assert.equal(decodificarDtc(0xc1, 0x00), 'U0100');
+  assert.equal(decodificarDtc(0x21, 0x35), 'P2135');
+});
+await teste('ISO-TP multi-frame de duas ECUs com cabeçalhos', () => {
+  const linhas = ['7E8100A43040301017104', '7E9044301071555555555', '7E82120002200AAAAAAAA'];
+  const msgs = parsearMensagens(linhas, 6);
+  const m8 = msgs.find((m) => m.ecu === '7E8');
+  const m9 = msgs.find((m) => m.ecu === '7E9');
+  assert.deepEqual(m8.dados, [0x43, 0x04, 0x03, 0x01, 0x01, 0x71, 0x04, 0x20, 0x00, 0x22]);
+  assert.deepEqual(m9.dados, [0x43, 0x01, 0x07, 0x15]);
+});
+await teste('Formato sem cabeçalho (014 / 0: / 1:)', () => {
+  const msgs = parsearMensagens(['014', '0: 49 02 01 4B 4E 41', '1: 46 58 34 31 31 42 45', '2: 35 30 30 30 30 30 30'], 6);
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].dados.length, 20);
+  assert.equal(msgs[0].dados[0], 0x49);
+});
+await teste('K-line com cabeçalho e checksum', () => {
+  const msgs = parsearMensagens(['48 6B 10 43 01 33 00 00 00 00 E4'], 3);
+  assert.equal(msgs[0].ecu, '10');
+  assert.deepEqual(msgs[0].dados, [0x43, 0x01, 0x33, 0x00, 0x00, 0x00, 0x00]);
+});
+await teste('Banco de códigos: estrutura e cobertura', () => {
+  const m = new Map(db.codigos.map((c) => [c.codigo, c]));
+  for (const c of ['P0301', 'P0011', 'P0016', 'P0128', 'P0420', 'P0441', 'P0455', 'P0456', 'P2135', 'P2101', 'P0715', 'P0720', 'P0741', 'P0750', 'P0770', 'P0325', 'P0326', 'P0171', 'P0172']) {
+    assert.ok(m.get(c), 'faltou ' + c);
+    assert.ok(m.get(c).notas_cerato, 'sem nota Cerato ' + c);
+  }
+  const p0 = db.codigos.filter((c) => /^P0\d{3}$/.test(c.codigo)).length;
+  assert.ok(p0 >= 990, 'P0 incompleto: ' + p0);
+  for (const c of db.codigos) {
+    for (const k of ['codigo', 'sistema', 'descricao', 'severidade', 'pode_rodar', 'causas_comuns', 'verificacoes', 'notas_cerato', 'fabricante', 'confianca']) assert.ok(k in c, c.codigo + ' sem ' + k);
+  }
+});
+
+for (const ruidoso of [false, true]) {
+  console.log(`\nFluxo completo no simulador${ruidoso ? ' (clone ruidoso)' : ''}`);
+  const sim = new SimulatorTransport({ cloneRuidoso: ruidoso });
+  await sim.open();
+  const log = [];
+  const elm = new Elm327(sim, { timeout: 3000, compat: ruidoso });
+  elm.on('log', (l) => log.push(l));
+  const obd = new Obd(elm, tabela);
+  const kia = new Kia(elm, () => ({ permitirApagarCriticos: false, compat: ruidoso }));
+
+  await teste('Inicialização: versão, protocolo e tensão', async () => {
+    const info = await elm.inicializar(() => {}, { protocolo: 6 });
+    assert.match(info.versao, /ELM327/);
+    assert.equal(info.protocoloNum, 6);
+    assert.match(info.protocolo, /15765/);
+    assert.ok(info.tensao > 11 && info.tensao < 15);
+    const txs = log.filter((l) => l.dir === 'tx').map((l) => l.texto);
+    for (const c of ['ATZ', 'ATE0', 'ATL0', 'ATS0', 'ATH1', 'ATAT1', 'ATI', 'AT@1', 'ATRV', 'ATSP6', 'ATDP']) assert.ok(txs.includes(c), 'não enviou ' + c);
+    assert.ok(!txs.includes('ATAT2'));
+  });
+  await teste('Descoberta de PIDs (00/20/40)', async () => {
+    const s = await obd.descobrirPids();
+    for (const p of ['0C', '0D', '05', '52', '2F', '3C', '31']) assert.ok(s.has(p), 'sem ' + p);
+    assert.ok(!s.has('5C'));
+  });
+  await teste('Status: MIL, DTCs e monitores', async () => {
+    const st = await obd.lerStatus();
+    assert.equal(st.mil, true);
+    assert.equal(st.qtdDtc, 4);
+    assert.ok(st.monitores.find((m) => m.id === 'evap' && m.suportado && !m.completo));
+    assert.ok(st.monitores.find((m) => m.id === 'cat' && m.completo));
+  });
+  await teste('Modo 03 multi-frame de duas ECUs', async () => {
+    const d = await obd.lerDtcs('03');
+    assert.deepEqual(d.map((x) => x.codigo + '@' + x.ecu).sort(), ['P0171@7E8', 'P0301@7E8', 'P0420@7E8', 'P0715@7E9']);
+  });
+  await teste('Modos 07 e 0A', async () => {
+    assert.deepEqual((await obd.lerDtcs('07')).map((x) => x.codigo), ['P0128']);
+    assert.deepEqual((await obd.lerDtcs('0A')).map((x) => x.codigo), ['P0420']);
+  });
+  await teste('Freeze frame (modo 02)', async () => {
+    const f = await obd.lerFreezeFrame();
+    assert.equal(f.dtc, 'P0301');
+    const rpm = f.valores.find((v) => v.pid === '0C');
+    assert.equal(rpm.valor, 0x1a90 / 4);
+  });
+  await teste('Modo 09: VIN, CALID, CVN', async () => {
+    assert.equal(await obd.lerVin(), 'KNAFX411BE5000000');
+    assert.equal((await obd.lerCalibracao())[0].calid, 'DEMO-CAL-GAMMA16');
+    assert.equal((await obd.lerCvn())[0].cvn, '3A5C910E');
+  });
+  await teste('Leitura multi-PID ao vivo', async () => {
+    const r = await obd.lerPids(['0C', '0D', '05', '0F', '0B', '11', '04', '0E', '14', '52', 'RV']);
+    assert.ok(r.get('0C').valor >= 600);
+    assert.ok(r.has('14') && r.get('14').extra);
+    assert.ok(r.has('RV'));
+    assert.equal(r.size, 11);
+  });
+  await teste('Fila sequencial com comandos concorrentes', async () => {
+    const [a, b, c] = await Promise.all([obd.lerPids(['0C']), elm.lerTensao(), obd.lerPids(['0D', '05'])]);
+    assert.ok(a.has('0C') && typeof b === 'number' && c.has('05'));
+  });
+  await teste('Módulo ABS via UDS', async () => {
+    const r = await kia.lerModulo(MODULOS_PADRAO.find((m) => m.id === 'abs'));
+    assert.equal(r.protocolo, 'UDS');
+    assert.equal(r.dtcs[0].codigo, 'C1201');
+  });
+  await teste('Módulo SRS via KWP2000 (UDS recusado com NRC 11)', async () => {
+    const r = await kia.lerModulo(MODULOS_PADRAO.find((m) => m.id === 'srs'));
+    assert.equal(r.protocolo, 'KWP2000');
+    assert.equal(r.dtcs[0].codigo, 'B1102');
+    assert.ok(r.log.some((l) => /Serviço não suportado/.test(l)));
+  });
+  await teste('Módulo TCM com resposta pendente (NRC 78)', async () => {
+    const r = await kia.lerModulo(MODULOS_PADRAO.find((m) => m.id === 'tcm'));
+    assert.equal(r.dtcs[0].codigo, 'P0715');
+  });
+  await teste('Apagar ABS bloqueado por padrão', async () => {
+    await assert.rejects(() => kia.apagarModulo(MODULOS_PADRAO.find((m) => m.id === 'abs'), 'UDS'), /DESATIVADO/);
+  });
+  await teste('Varredura rápida encontra os módulos', async () => {
+    const achados = await kia.varrer({ lista: [0x7e0, 0x7e1, 0x7d1, 0x7d2, 0x7a0, 0x7c6, 0x7b0, 0x750] });
+    assert.deepEqual(achados.map((a) => a.tx).sort(), ['7A0', '7C6', '7D1', '7D2', '7E0', '7E1']);
+  });
+  await teste('OBD volta a funcionar depois dos módulos', async () => {
+    assert.equal((await obd.lerDtcs('03')).length, 4);
+  });
+  await teste('Modo 04 recusado com motor ligado; aceito com motor desligado', async () => {
+    assert.equal(await obd.motorDesligado(), false);
+    sim.motorLigado = false;
+    assert.equal(await obd.motorDesligado(), true);
+    const ecus = await obd.apagarDtcs();
+    assert.ok(ecus.includes('7E8'));
+    assert.equal((await obd.lerDtcs('03')).length, 0);
+    assert.equal((await obd.lerDtcs('0A')).length, 1, 'permanente não apaga');
+    const st = await obd.lerStatus();
+    assert.ok(st.incompletos >= 3, 'monitores zerados');
+  });
+  await sim.close();
+}
+
+console.log(`\n${ok} teste(s) passaram${process.exitCode ? ', com falhas' : ''}.`);
