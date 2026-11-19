@@ -70,8 +70,11 @@ export async function conectar(tipo = config.transporte) {
     if (e?.name === 'NotFoundError' || /No port selected|cancel/i.test(e?.message || '')) {
       throw new Error('Nenhum adaptador escolhido. Confira se o ELM327 está pareado no Bluetooth do Android.');
     }
-    if (e?.name === 'NetworkError' || /Failed to open/i.test(e?.message || '')) {
-      throw new Error('Não foi possível abrir a conexão Bluetooth. Desligue e ligue o Bluetooth do celular, confira se o adaptador está na tomada OBD com a ignição ligada e tente de novo.');
+    // registra o erro real no log (Mais › Terminal › Copiar log)
+    const detalhe = `${e?.name || 'Erro'}: ${e?.message || e}`;
+    estado.log.push({ dir: 'er', texto: 'Falha ao abrir: ' + detalhe + (t.tentativasFalhas ? ' | tentativas: ' + t.tentativasFalhas.join(' ; ') : ''), ts: new Date() });
+    if (e?.name === 'NetworkError' || /Failed to open|connect/i.test(e?.message || '')) {
+      throw new Error('O adaptador não aceitou a conexão (4 tentativas). 1) Feche totalmente outros apps OBD (Car Scanner, Torque) — o adaptador só aceita uma conexão. 2) Desligue e ligue o Bluetooth do celular. 3) Tire e recoloque o adaptador na tomada com a ignição ligada. Detalhe: ' + detalhe);
     }
     throw e;
   }

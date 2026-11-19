@@ -42,7 +42,22 @@ export class SerialBtTransport extends BaseTransport {
   }
 
   async _abrirPorta() {
-    await this.port.open({ baudRate: this.baudRate, bufferSize: 4096 });
+    // Clones costumam falhar na primeira abertura do canal RFCOMM: tenta até 4 vezes
+    let ultimoErro = null;
+    for (let tentativa = 1; tentativa <= 4; tentativa++) {
+      try {
+        await this.port.open({ baudRate: this.baudRate, bufferSize: 4096 });
+        ultimoErro = null;
+        break;
+      } catch (e) {
+        ultimoErro = e;
+        this.tentativasFalhas = (this.tentativasFalhas || []).concat(`${tentativa}: ${e.name} ${e.message}`);
+        if (e.name === 'InvalidStateError') { ultimoErro = null; break; } // já estava aberta
+        try { await this.port.close(); } catch { /* ignora */ }
+        await new Promise((r) => setTimeout(r, 1200 * tentativa));
+      }
+    }
+    if (ultimoErro) throw ultimoErro;
     this.aberto = true;
     this.port.addEventListener?.('disconnect', () => this._caiu());
     this._leitura = this._loopLeitura();
