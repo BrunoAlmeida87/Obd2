@@ -29,8 +29,12 @@ export async function lerErros() {
   try { freeze = await obd.lerFreezeFrame(); } catch (e) { console.warn('freeze', e); }
   if (!estado.vin) { try { estado.vin = await obd.lerVin(); } catch { /* ignora */ } }
 
-  const km = await perguntar('Quilometragem', 'Km atual do painel (opcional, ajuda a comparar leituras)', config.ultimoKm, 'number');
-  if (km) salvarConfig({ ultimoKm: km });
+  // Só pergunta o km se o usuário ativou isso em Configurações; senão usa o último km salvo (se houver)
+  let km = config.ultimoKm || null;
+  if (config.perguntarKm) {
+    km = await perguntar('Quilometragem', 'Km atual do painel (opcional, ajuda a comparar leituras)', config.ultimoKm, 'number');
+    if (km) salvarConfig({ ultimoKm: km });
+  }
 
   const leitura = {
     tipo: 'leitura',
@@ -73,7 +77,8 @@ function html() {
   const seg = `<div class="segmented" role="tablist">${ABAS.map((a) => `<button role="tab" data-aba="${a.id}" class="${a.id === abaAtual ? 'active' : ''}">${a.nome}<span class="count">${contagem(a.id)}</span></button>`).join('')}</div>`;
   const topo = `<div class="row between" style="margin-bottom:10px">
     <div class="muted small">${l ? 'Leitura de ' + dataHora(l.data) + (l.km ? ` · ${l.km.toLocaleString('pt-BR')} km` : '') : 'Nenhuma leitura ainda'}</div>
-    <button class="btn sm" id="btnReler" ${conectado() ? '' : 'disabled'}>${icone('refresh')} Ler</button></div>`;
+    <div class="row"><button class="btn sm" id="btnRelErros" ${l ? '' : 'disabled'}>${icone('printer')} Relatório</button>
+    <button class="btn sm" id="btnReler" ${conectado() ? '' : 'disabled'}>${icone('refresh')} Ler</button></div></div>`;
 
   if (abaAtual === 'modulos') return seg + topo + htmlModulos();
 
@@ -138,6 +143,7 @@ function htmlModulos() {
 function ligar(raiz) {
   $$('[data-aba]', raiz).forEach((b) => b.addEventListener('click', () => { abaAtual = b.dataset.aba; raiz.innerHTML = html(); ligar(raiz); }));
   $('#btnReler', raiz)?.addEventListener('click', (e) => comCarregamento(e.currentTarget, lerErros, 'Lendo…'));
+  $('#btnRelErros', raiz)?.addEventListener('click', () => { location.hash = '#more/relatorios'; });
   $$('.dtc', raiz).forEach((b) => b.addEventListener('click', () => abrirDetalhe(b.dataset.codigo, b.dataset)));
   $('#btnApagar', raiz)?.addEventListener('click', (e) => comCarregamento(e.currentTarget, apagarComConfirmacao, 'Apagando…'));
   $('#btnLerModulos', raiz)?.addEventListener('click', (e) => comCarregamento(e.currentTarget, () => lerModulos(config.modulos), 'Lendo módulos…'));

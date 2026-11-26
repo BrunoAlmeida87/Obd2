@@ -22,7 +22,8 @@ export const PADRAO = {
   modulos: MODULOS_PADRAO,
   permitirApagarCriticos: false, // ABS/SRS: desativado por padrão
   demo: { motorLigado: true, cloneRuidoso: false },
-  ultimoKm: ''
+  ultimoKm: '',
+  perguntarKm: false            // perguntar a quilometragem a cada leitura de erros
 };
 
 export const config = structuredClone(PADRAO);

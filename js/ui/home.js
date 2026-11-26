@@ -48,8 +48,9 @@ function html() {
       <button class="btn primary big" id="btnLer">${icone('search')} Ler erros</button>
       <div class="btn-grid">
         <button class="btn" id="btnVivo">${icone('gauge')} Dados ao vivo</button>
-        <button class="btn" id="btnDesc">${icone('x')} Desconectar</button>
-      </div>`;
+        <button class="btn" id="btnRelatorio">${icone('printer')} Relatório completo</button>
+      </div>
+      <button class="btn ghost block" id="btnDesc">${icone('x')} Desconectar</button>`;
   }
 
   const milHtml = st
@@ -98,6 +99,7 @@ function ligar(raiz) {
   });
   $('#btnDesc', raiz)?.addEventListener('click', () => desconectar());
   $('#btnVivo', raiz)?.addEventListener('click', () => ir('live'));
+  $('#btnRelatorio', raiz)?.addEventListener('click', () => ir('more/relatorios'));
   $('#btnUltima', raiz)?.addEventListener('click', () => ir('dtc'));
   $('#btnLer', raiz)?.addEventListener('click', (e) => {
     if (!conectado()) return;

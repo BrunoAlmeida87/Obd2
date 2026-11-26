@@ -33,12 +33,10 @@ const SHOTS = process.argv[3] || null;
   });
   await shot('02-conectado');
 
-  await passo('Ler erros e salvar com km', async () => {
+  await passo('Ler erros sem perguntar km', async () => {
     await page.click('#btnLer');
-    await page.waitForSelector('#pergunta', { timeout: 20000 });
-    await page.fill('#pergunta', '85432');
-    await page.click('.modal .btn.primary');
-    await page.waitForSelector('.dtc[data-codigo="P0301"]', { timeout: 10000 });
+    await page.waitForSelector('.dtc[data-codigo="P0301"]', { timeout: 20000 });
+    if (await page.$('#pergunta')) throw new Error('não deveria perguntar km');
     const cods = await page.$$eval('.dtc', (els) => els.map((e) => e.dataset.codigo));
     for (const c of ['P0301', 'P0171', 'P0420', 'P0715']) if (!cods.includes(c)) throw new Error('faltou ' + c);
   });
@@ -125,8 +123,6 @@ const SHOTS = process.argv[3] || null;
     await page.click('.modal .btn.danger');
     await page.waitForSelector('.modal h2:text("Confirmação final")', { timeout: 10000 });
     await page.click('.modal .btn.danger');
-    await page.waitForSelector('#pergunta', { timeout: 15000 });
-    await page.click('.modal .btn.ghost');
     await page.waitForFunction(() => !document.querySelector('.dtc[data-codigo="P0301"]'), null, { timeout: 10000 });
     await page.click('[data-tab="history"]');
     await page.waitForSelector('.tl-item.clear');
@@ -138,7 +134,7 @@ const SHOTS = process.argv[3] || null;
     const [popup] = await Promise.all([page.waitForEvent('popup'), page.click('#btnRelatorio')]);
     await popup.waitForLoadState();
     const t = await popup.textContent('body');
-    if (!/Relatório de diagnóstico OBD2/.test(t)) throw new Error('relatório vazio');
+    if (!/Relatório de erros — OBD2/.test(t)) throw new Error('relatório vazio');
     await popup.close();
   });
 
@@ -180,6 +176,29 @@ const SHOTS = process.argv[3] || null;
     await page.waitForSelector('#resBusca .dtc');
     await page.fill('#busca', 'P1999');
     await page.waitForSelector('#resBusca .dtc');
+  });
+
+  await passo('Relatório completo do carro e relatório técnico', async () => {
+    await page.click('[data-tab="home"]');
+    await page.click('#btnRelatorio');
+    await page.click('#btnRelCompleto');
+    await page.waitForSelector('.modal h2:text("Relatório completo pronto")', { timeout: 60000 });
+    const [popup] = await Promise.all([page.waitForEvent('popup'), page.click('.modal .btn.primary')]);
+    await popup.waitForLoadState();
+    const t = await popup.textContent('body');
+    for (const trecho of ['Relatório completo do carro', 'KNAFX411BE5000000', 'DEMO-CAL-GAMMA16', 'Sensores no momento da coleta', 'Teor de etanol', 'Monitores de prontidão', 'Histórico', 'C1201']) {
+      if (!t.includes(trecho)) throw new Error('relatório completo sem: ' + trecho);
+    }
+    await popup.close();
+    await page.click('.modal .btn.ghost');
+    const [down] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }), page.click('#btnRelTecnico')]);
+    if (!/relatorio-tecnico-.*\.json$/.test(down.suggestedFilename())) throw new Error('JSON técnico não baixado');
+    const caminho = await down.path();
+    const rel = JSON.parse(require('fs').readFileSync(caminho, 'utf8'));
+    if (rel.tipo !== 'relatorio-tecnico' || rel.resumo.pids_modo01.length < 30 || rel.comandos.length < 60) throw new Error('relatório técnico incompleto');
+    if (!rel.resumo.modulos_que_responderam.includes('7D1->7D9')) throw new Error('módulos não registrados: ' + rel.resumo.modulos_que_responderam);
+    await page.waitForSelector('.modal h2:text("Relatório técnico gerado")');
+    await page.click('.modal .btn.ghost');
   });
 
   await passo('Persistência após recarregar', async () => {

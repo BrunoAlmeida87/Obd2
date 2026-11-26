@@ -8,8 +8,13 @@ import { apagarTudo } from '../storage.js';
 import { el, $, $$, icone, escHtml, modal, confirmar, toast, vazio, comCarregamento } from './dom.js';
 import { abrirDetalhe } from './dtc.js';
 import { horaMs, copiarTexto, baixarArquivo, carimbo } from '../util.js';
+import { coletarCompleto, coletarTecnico } from '../coleta.js';
+import { gerarRelatorioHtml, gerarRelatorioCompletoHtml, abrirHtml } from './report.js';
+import { listarLeituras } from '../storage.js';
+import { comparar } from './history.js';
 
 const SUBTELAS = {
+  relatorios: { titulo: 'Relatórios', icone: 'printer', desc: 'Erros, carro completo e relatório técnico para melhorar o app', fn: telaRelatorios },
   prontidao: { titulo: 'Prontidão (monitores)', icone: 'shield', desc: 'Monitores completos/incompletos e luz de injeção', fn: telaProntidao },
   veiculo: { titulo: 'Informações do veículo', icone: 'car', desc: 'VIN, calibração (CALID), CVN, adaptador', fn: telaVeiculo },
   varredura: { titulo: 'Varredura de módulos', icone: 'scan', desc: 'Descobrir quais endereços 7xx respondem (experimental)', fn: telaVarredura },
@@ -204,6 +209,11 @@ function telaConfig(view) {
           <option value="">Não informado</option><option value="automatico" ${config.cambio === 'automatico' ? 'selected' : ''}>Automático 6 marchas</option><option value="manual" ${config.cambio === 'manual' ? 'selected' : ''}>Manual 6 marchas</option></select>
           <small>Usado no relatório e para destacar os problemas típicos de cada versão.</small></label>
       </div>
+      <div class="card">
+        ${sw('cfgPerguntarKm', 'Perguntar a quilometragem ao ler erros', 'Desligado: o app não pergunta e usa o km informado abaixo (se houver).', config.perguntarKm)}
+        <label class="field" style="margin-top:8px"><span>Km atual do painel (opcional)</span><input class="input" id="cfgKm" type="number" inputmode="numeric" value="${escHtml(config.ultimoKm || '')}" placeholder="ex.: 85432">
+          <small>Fica gravado nas próximas leituras e relatórios. Atualize quando quiser.</small></label>
+      </div>
       <div class="section-title">Aparência</div>
       <div class="card">${sw('cfgClaro', 'Tema claro', 'Padrão é o escuro (melhor à noite). O claro pode ajudar sob sol forte.', config.tema === 'light')}</div>
       <div class="section-title">Conexão</div>
@@ -246,6 +256,8 @@ function telaConfig(view) {
     const bind = (id, fn) => $(id, view)?.addEventListener('change', (e) => fn(e.target));
     bind('#cfgMotor', (t) => salvarConfig({ motor: t.value }));
     bind('#cfgCambio', (t) => salvarConfig({ cambio: t.value }));
+    bind('#cfgPerguntarKm', (t) => salvarConfig({ perguntarKm: t.checked }));
+    bind('#cfgKm', (t) => salvarConfig({ ultimoKm: t.value.trim() }));
     bind('#cfgClaro', (t) => salvarConfig({ tema: t.checked ? 'light' : 'dark' }));
     bind('#cfgTransp', (t) => salvarConfig({ transporte: t.value }));
     bind('#cfgTodos', (t) => salvarConfig({ mostrarTodos: t.checked }));
@@ -381,4 +393,81 @@ function telaAjuda(view) {
   });
   $$('[data-dtc]', view).forEach((b) => b.addEventListener('click', () => abrirDetalhe(b.dataset.dtc)));
   return null;
+}
+
+// ------------------------------------------------------------------ relatórios
+function telaRelatorios(view) {
+  let rodando = false;
+  const desenhar = (prog) => {
+    const l = estado.ultimaLeitura;
+    view.innerHTML = `
+      <div class="card"><h3>${icone('alert')} Relatório dos erros</h3>
+        <p class="small">Todos os códigos da última leitura (armazenados, pendentes, permanentes e módulos), com gravidade, “posso rodar?”, causas, verificações, notas do Cerato, freeze frame e monitores.</p>
+        <p class="muted small">${l ? 'Última leitura: ' + escHtml(new Date(l.data).toLocaleString('pt-BR')) : 'Nenhuma leitura ainda — use “Ler erros” ou o relatório completo abaixo.'}</p>
+        <button class="btn block" id="btnRelErros" ${l ? '' : 'disabled'}>${icone('printer')} Abrir relatório dos erros</button></div>
+      <div class="card"><h3>${icone('car')} Relatório completo do carro</h3>
+        <p class="small">Lê tudo de uma vez e gera um relatório único: identificação (VIN, calibração), luz de injeção, monitores, todos os códigos, módulos Kia, freeze frame, valor atual de <b>todos</b> os sensores suportados e o histórico.</p>
+        <p class="muted small">Leva de 30 s a 2 min. Ignição ligada; motor pode estar ligado ou desligado. Só faz leituras.</p>
+        <button class="btn primary block" id="btnRelCompleto" ${conectado() && !rodando ? '' : 'disabled'}>${icone('search')} Coletar tudo e gerar</button></div>
+      <div class="card"><h3>${icone('wrench')} Relatório técnico (para melhorar o app)</h3>
+        <p class="small">Grava as respostas <b>brutas</b> do adaptador e das centrais: PIDs suportados, testes do modo 06, informações do modo 09 e a identificação/dados de cada módulo (motor, câmbio, ABS, airbag, BCM, painel e os achados na varredura). Com esse arquivo dá para ensinar o app a ler mais coisas do seu carro.</p>
+        <p class="muted small">Dica: faça antes a <a href="#more/varredura">varredura completa</a>. Leva de 1 a 4 min. Só faz leituras.</p>
+        <button class="btn block" id="btnRelTecnico" ${conectado() && !rodando ? '' : 'disabled'}>${icone('download')} Gerar relatório técnico</button></div>
+      ${prog ? `<div class="card"><div class="small">${escHtml(prog.texto)}</div><div class="progress" style="margin-top:8px"><div style="width:${prog.pct}%"></div></div></div>` : ''}
+      ${!conectado() ? '<p class="muted small center">Conecte ao carro (ou ao modo demo) para coletar.</p>' : ''}`;
+
+    $('#btnRelErros', view)?.addEventListener('click', async () => {
+      const todas = await listarLeituras().catch(() => []);
+      const ll = estado.ultimaLeitura;
+      const cmp = comparar(ll, todas);
+      abrirHtml(ll.completo ? gerarRelatorioCompletoHtml(ll, todas, cmp) : gerarRelatorioHtml(ll, cmp), `relatorio-erros-${carimbo()}.html`);
+    });
+
+    $('#btnRelCompleto', view)?.addEventListener('click', () => comCarregamento(null, async () => {
+      rodando = true;
+      try {
+        const r = await coletarCompleto((texto, pct) => desenhar({ texto, pct }));
+        const todas = await listarLeituras().catch(() => []);
+        const html = gerarRelatorioCompletoHtml(r, todas, comparar(r, todas));
+        const nome = `relatorio-completo-${carimbo()}.html`;
+        rodando = false;
+        desenhar();
+        modal({
+          titulo: 'Relatório completo pronto',
+          conteudo: `<p>${(r.valores || []).length} sensores lidos, ${['armazenados', 'pendentes', 'permanentes'].reduce((s, k) => s + r.dtcs[k].length, 0)} código(s) OBD e ${r.dtcs.modulos.reduce((s, m) => s + m.dtcs.length, 0)} em módulos. A coleta também foi salva no Histórico.</p>`,
+          botoes: [
+            { texto: 'Fechar', classe: 'ghost' },
+            { texto: 'Baixar', icone: 'download', aoClicar: () => { baixarArquivo(nome, html, 'text/html;charset=utf-8'); return false; } },
+            { texto: 'Abrir', classe: 'primary', icone: 'printer', aoClicar: () => { abrirHtml(html, nome); return false; } }
+          ]
+        });
+      } finally { if (rodando) { rodando = false; desenhar(); } }
+    }));
+
+    $('#btnRelTecnico', view)?.addEventListener('click', () => comCarregamento(null, async () => {
+      rodando = true;
+      try {
+        const rel = await coletarTecnico((texto, pct) => desenhar({ texto, pct }));
+        const json = JSON.stringify(rel, null, 1);
+        const nome = `relatorio-tecnico-${carimbo()}.json`;
+        const res = rel.resumo;
+        const textoResumo = `Relatório técnico Cerato OBD2 ${rel.data}\nAdaptador: ${rel.adaptador.versao} | ${rel.adaptador.protocolo}\nPIDs modo 01: ${res.pids_modo01.join(' ')}\nMIDs modo 06: ${res.mids_modo06.join(' ') || 'nenhum'}\nModo 09: ${res.infos_modo09.join(' ') || 'nenhum'}\nMódulos que responderam: ${res.modulos_que_responderam.join(' ') || 'nenhum'}\nComandos: ${res.total_comandos}`;
+        rodando = false;
+        desenhar();
+        baixarArquivo(nome, json, 'application/json');
+        modal({
+          titulo: 'Relatório técnico gerado',
+          conteudo: `<p>O arquivo <b>${escHtml(nome)}</b> foi baixado (pasta Downloads). Envie esse arquivo na conversa com o Claude para ele analisar o que mais o seu carro suporta.</p>
+            <pre class="term-log" style="height:auto;max-height:40vh">${escHtml(textoResumo)}</pre>`,
+          botoes: [
+            { texto: 'Fechar', classe: 'ghost' },
+            { texto: 'Baixar de novo', icone: 'download', aoClicar: () => { baixarArquivo(nome, json, 'application/json'); return false; } },
+            { texto: 'Copiar tudo', classe: 'primary', icone: 'copy', aoClicar: async () => { toast((await copiarTexto(json)) ? 'Copiado. Cole na conversa.' : 'Não foi possível copiar.', 'ok'); return false; } }
+          ]
+        });
+      } finally { if (rodando) { rodando = false; desenhar(); } }
+    }));
+  };
+  desenhar();
+  return aoMudar(() => { if (!rodando) desenhar(); });
 }

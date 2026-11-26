@@ -89,7 +89,7 @@ export function render(view) {
   $('#btnRelatorio', raiz).addEventListener('click', () => {
     const l = leituras.find((x) => x.tipo === 'leitura');
     if (!l) { toast('Nenhuma leitura para gerar relatório.', 'warn'); return; }
-    abrirRelatorio(l, comparar(l, leituras));
+    abrirRelatorio(l, comparar(l, leituras), leituras);
   });
 
   carregar();
@@ -143,8 +143,8 @@ function abrirLeitura(l, todas, recarregar) {
     return true;
   } }];
   if (l.tipo === 'leitura') {
-    botoes.push({ texto: 'Relatório', classe: 'primary', icone: 'printer', aoClicar: () => { abrirRelatorio(l, cmp); return false; } });
-    botoes.push({ texto: 'Baixar', classe: '', icone: 'download', aoClicar: () => { baixarRelatorio(l, cmp); return false; } });
+    botoes.push({ texto: 'Relatório', classe: 'primary', icone: 'printer', aoClicar: () => { abrirRelatorio(l, cmp, todas); return false; } });
+    botoes.push({ texto: 'Baixar', classe: '', icone: 'download', aoClicar: () => { baixarRelatorio(l, cmp, todas); return false; } });
   }
   modal({ titulo: l.tipo === 'apagamento' ? 'Apagamento' : 'Leitura de erros', conteudo, botoes });
 }

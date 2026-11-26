@@ -53,6 +53,12 @@ No Chrome: menu **⋮ › Instalar app** (ou “Adicionar à tela inicial”). D
 
 ## Uso rápido
 
+- **Relatórios (Mais › Relatórios, ou “Relatório completo” no Início):**
+  - *Relatório dos erros:* todos os códigos da última leitura com gravidade, “posso rodar?”, causas, verificações, notas do Cerato, freeze frame e monitores.
+  - *Relatório completo do carro:* lê tudo de uma vez (VIN, calibração, luz de injeção, monitores, códigos, módulos Kia, freeze frame, valor atual de todos os sensores suportados) e junta o histórico. Abra e use “Imprimir / salvar PDF”.
+  - *Relatório técnico:* arquivo JSON com as respostas brutas do adaptador e das centrais (PIDs, modo 06, modo 09, identificação e dados de cada módulo). Serve para ensinar o app a ler mais itens do seu carro. Só faz leituras.
+- **Quilometragem:** o app não pergunta mais o km a cada leitura. Informe o km (opcional) em Configurações, ou ligue “Perguntar a quilometragem” se preferir.
+
 - **Erros:** cartões coloridos por gravidade (vermelho = grave, amarelo = atenção, azul = leve). Toque para ver causas, verificações, notas do Cerato, problemas conhecidos e o freeze frame.
 - **Apagar códigos:** botão no rodapé da aba Erros. Pede duas confirmações, avisa que **zera os monitores de prontidão** (afeta a inspeção veicular) e só funciona com **motor desligado e ignição ligada**.
 - **Ao vivo:** escolha os PIDs em “PIDs” (menos PIDs = mais rápido). Vire o celular para o **modo painel**. “Gravar” salva a sessão no Histórico e exporta CSV. Alertas padrão: temperatura do motor > 105 °C e bateria < 12,0 V (edite em Configurações).
@@ -77,6 +83,7 @@ js/obd.js                                 modos 01–0A e decodificação de PID
 js/kia.js                                 UDS/KWP2000, endereços, NRC, varredura
 js/storage.js                             IndexedDB (leituras, sessões, configuração)
 js/settings.js, js/dtcdb.js, js/util.js   configuração, consulta ao banco, utilidades
+js/coleta.js                              coletas do relatório completo e do relatório técnico
 js/ui/*.js                                telas (início, erros, ao vivo, histórico, mais), medidor, gráfico, relatório
 data/pids.json                            tabela declarativa de PIDs (pid, bytes, fórmula, unidade, mín., máx.)
 data/dtc-db.json                          banco de códigos em pt-BR (gerado)
