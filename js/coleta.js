@@ -10,7 +10,7 @@ import { salvarLeitura } from './storage.js';
 import { parsearMensagens } from './elm327.js';
 import { horaMs } from './util.js';
 
-export const VERSAO_APP = '1.1.0';
+export const VERSAO_APP = '1.2.0';
 const hex2 = (n) => n.toString(16).toUpperCase().padStart(2, '0');
 
 async function tentar(fn, padrao = null) {
@@ -39,6 +39,8 @@ export async function coletarCompleto(progresso = () => {}) {
   if (r.vin) estado.vin = r.vin;
   r.calid = await tentar(() => obd.lerCalibracao(), []);
   r.cvn = await tentar(() => obd.lerCvn(), []);
+
+  r.nomesEcu = await tentar(() => obd.lerNomesEcu(), []);
 
   progresso('Luz de injeção e monitores de prontidão…', 15);
   const st = await tentar(() => obd.lerStatus());
@@ -69,16 +71,22 @@ export async function coletarCompleto(progresso = () => {}) {
     return { pid, nome: d?.nome || pid, grupo: d?.grupo || 'Outros', unidade: d?.unidade || '', texto: v.texto, valor: typeof v.valor === 'number' ? v.valor : null, extra: v.extra?.texto ? `${v.extra.nome}: ${v.extra.texto}` : '', ecu: v.ecu };
   });
 
+  progresso('Testes internos dos monitores (modo 06)…', 60);
+  r.modo06 = estado.tab06 ? await tentar(() => obd.lerModo06(estado.tab06), []) : [];
+
   const modulos = [];
   for (let i = 0; i < config.modulos.length; i++) {
     const m = config.modulos[i];
     progresso(`Módulo ${m.nome} (${m.tx})…`, 65 + Math.round((i / config.modulos.length) * 30));
+    let item;
     try {
       const res = await kia.lerModulo(m);
-      modulos.push({ modulo: { ...m }, protocolo: res.protocolo, dtcs: res.dtcs, log: res.log });
+      item = { modulo: { ...m }, protocolo: res.protocolo, dtcs: res.dtcs, log: res.log };
     } catch (e) {
-      modulos.push({ modulo: { ...m }, erro: e.message, dtcs: [] });
+      item = { modulo: { ...m }, erro: e.message, dtcs: [] };
     }
+    item.identificacao = await tentar(() => kia.identificarModulo(m), []);
+    modulos.push(item);
   }
   r.dtcs = { armazenados, pendentes, permanentes, modulos };
 
@@ -119,14 +127,21 @@ async function mascaraSuportados(modo, cmd, sufixo = '') {
   return ids.filter((x) => parseInt(x, 16) % 0x20 !== 0);
 }
 
-export async function coletarTecnico(progresso = () => {}) {
+/**
+ * opcoes.profundo = true: além do básico, procura blocos de dados que o carro tenha:
+ *  - módulos KWP2000: 10 81 e todos os identificadores locais 21 00–FF;
+ *  - módulos UDS (exceto airbag): identificadores 22 B000–B0FF e F100–F1FF;
+ *  - variantes de leitura de códigos (UDS 19 e KWP 18). Tudo somente leitura.
+ */
+export async function coletarTecnico(progresso = () => {}, opcoes = {}) {
   exigirConexao();
   const { elm } = estado;
   const registros = [];
   let grupo = '';
+  let alvo = { tx: '7DF' };
   const cmd = async (c, timeout = 3000) => {
     const t0 = performance.now();
-    const r = await elm.comando(c, { tentativas: 0, timeout });
+    const r = await elm.comando(c, { tentativas: 0, timeout, alvo });
     registros.push({ grupo, cmd: c, resposta: r.linhas, erro: r.erro?.codigo || null, ms: Math.round(performance.now() - t0) });
     return r;
   };
@@ -167,7 +182,7 @@ export async function coletarTecnico(progresso = () => {}) {
       const a = lista[i];
       grupo = `modulo ${a.tx}->${a.rx} (${a.nome})`;
       progresso(`Módulo ${a.nome} ${a.tx}: identificação e dados…`, 55 + Math.round((i / lista.length) * 40));
-      await elm.definirAlvo(a.tx, a.rx);
+      alvo = { tx: a.tx, rx: a.rx };
       const sessao = await cmd('1001');
       if (!sessao.linhas.length || sessao.erro === 'NO_DATA') {
         await cmd('3E00');
@@ -178,8 +193,36 @@ export async function coletarTecnico(progresso = () => {}) {
       for (const c of LOCAIS_KWP) await cmd(c);
       await cmd('1902FF', 4000);
       await cmd('1802FF00', 4000);
+      if (!opcoes.profundo) continue;
+
+      const base = 55 + Math.round((i / lista.length) * 40);
+      const resp = (c) => registros.filter((r) => r.grupo === grupo && r.cmd === c).pop();
+      const positivo = (c, sid) => { const r = resp(c); return r && r.resposta.some((l) => l.replace(/\s/g, '').toUpperCase().slice(3).match(new RegExp('^(0[0-9A-F]|1[0-9A-F]{3})' + sid))); };
+      const nrc = (c) => { const r = resp(c); const l = r?.resposta?.[0]?.replace(/\s/g, '').toUpperCase() || ''; const m = l.slice(3).match(/^037F([0-9A-F]{2})([0-9A-F]{2})/); return m ? m[2] : null; };
+      // variantes de leitura de códigos
+      for (const c of ['190209', '190208', '19020D', '1901FF', '1800FF00', '18020000', '18000000', '1300', '17FF00']) await cmd(c, 4000);
+      // KWP2000: sessão 10 81 e varredura de identificadores locais
+      const ehKwp = nrc('1001') === '12' || positivo('1A80', '5A') || positivo('2101', '61') || ['12', '31'].includes(nrc('2101'));
+      if (ehKwp) {
+        await cmd('1081');
+        for (let id = 0; id <= 0xff; id++) {
+          if (id % 16 === 0) progresso(`Módulo ${a.nome}: blocos 21 ${hex2(id)}…`, base);
+          await cmd('21' + hex2(id), 1500);
+        }
+      }
+      // UDS: identificadores mais usados pela Hyundai/Kia (não aplica ao airbag)
+      const ehUds = (positivo('22F187', '62') || positivo('22F193', '62')) && a.tx !== '7D2';
+      if (ehUds) {
+        for (const faixa of [0xb000, 0xf100]) {
+          for (let did = faixa; did <= faixa + 0xff; did++) {
+            if (did % 32 === 0) progresso(`Módulo ${a.nome}: identificadores 22 ${did.toString(16).toUpperCase()}…`, base);
+            await cmd('22' + did.toString(16).toUpperCase().padStart(4, '0'), 1200);
+          }
+        }
+      }
     }
   } finally {
+    alvo = { tx: '7DF' };
     await elm.restaurarPadrao();
   }
 
@@ -187,6 +230,7 @@ export async function coletarTecnico(progresso = () => {}) {
   const rel = {
     app: 'cerato-obd',
     tipo: 'relatorio-tecnico',
+    profundo: !!opcoes.profundo,
     versao_app: VERSAO_APP,
     data: new Date().toISOString(),
     navegador: navigator.userAgent,

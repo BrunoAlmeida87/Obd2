@@ -35,8 +35,27 @@ export async function carregarConfig() {
   } catch (e) {
     console.warn('Não foi possível carregar a configuração', e);
   }
+  migrarModulos();
   aplicarTema();
   return config;
+}
+
+/** Atualiza a tabela de módulos salva com a topologia confirmada, sem perder edições do usuário. */
+function migrarModulos() {
+  const antigosPadrao = ['ABS / ESC', 'Motor (ECM)', 'Câmbio automático (TCM)', 'Airbag (SRS)', 'Carroceria (BCM)', 'Painel de instrumentos'];
+  const lista = (config.modulos || []).map((m) => ({ ...m }));
+  for (const p of MODULOS_PADRAO) {
+    const atual = lista.find((m) => m.tx.toUpperCase() === p.tx);
+    if (!atual) { lista.push({ ...p }); continue; }
+    // só renomeia nomes genéricos (da varredura) ou os nomes padrão antigos
+    if (/^Módulo [0-9A-F]{3}$/i.test(atual.nome) || antigosPadrao.includes(atual.nome)) {
+      atual.nome = p.nome;
+      atual.id = p.id;
+      atual.critico = p.critico;
+    }
+    atual.nota = p.nota;
+  }
+  config.modulos = lista;
 }
 
 export async function salvarConfig(parcial = {}) {

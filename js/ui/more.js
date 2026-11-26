@@ -15,6 +15,7 @@ import { comparar } from './history.js';
 
 const SUBTELAS = {
   relatorios: { titulo: 'Relatórios', icone: 'printer', desc: 'Erros, carro completo e relatório técnico para melhorar o app', fn: telaRelatorios },
+  testes: { titulo: 'Testes dos monitores (modo 06)', icone: 'chart', desc: 'Resultado dos testes internos: catalisador, sondas, comando variável', fn: telaTestes },
   prontidao: { titulo: 'Prontidão (monitores)', icone: 'shield', desc: 'Monitores completos/incompletos e luz de injeção', fn: telaProntidao },
   veiculo: { titulo: 'Informações do veículo', icone: 'car', desc: 'VIN, calibração (CALID), CVN, adaptador', fn: telaVeiculo },
   varredura: { titulo: 'Varredura de módulos', icone: 'scan', desc: 'Descobrir quais endereços 7xx respondem (experimental)', fn: telaVarredura },
@@ -76,6 +77,7 @@ function telaVeiculo(view) {
         <dt>VIN</dt><dd class="mono">${escHtml(estado.vin || '—')}</dd>
         <dt>Calibração</dt><dd class="mono">${extra.calid ? extra.calid.map((c) => `${escHtml(c.calid)} <span class="muted">(${escHtml(c.ecu)})</span>`).join('<br>') : '—'}</dd>
         <dt>CVN</dt><dd class="mono">${extra.cvn ? extra.cvn.map((c) => `${escHtml(c.cvn)} <span class="muted">(${escHtml(c.ecu)})</span>`).join('<br>') : '—'}</dd>
+        <dt>Centrais</dt><dd>${extra.nomes?.length ? extra.nomes.map((n) => `${escHtml(n.nome)} <span class="muted">(${escHtml(n.ecu)})</span>`).join('<br>') : '—'}</dd>
         <dt>Motor</dt><dd>${escHtml(config.motor || 'não informado')} <a href="#more/config">alterar</a></dd>
         <dt>Câmbio</dt><dd>${escHtml(config.cambio || 'não informado')}</dd>
       </dl></div>
@@ -93,7 +95,7 @@ function telaVeiculo(view) {
     $('#btnLerInfo', view).addEventListener('click', (e) => comCarregamento(e.currentTarget, async () => {
       exigirConexao();
       estado.vin = await estado.obd.lerVin();
-      extra = { calid: await estado.obd.lerCalibracao(), cvn: await estado.obd.lerCvn() };
+      extra = { calid: await estado.obd.lerCalibracao(), cvn: await estado.obd.lerCvn(), nomes: await estado.obd.lerNomesEcu().catch(() => []) };
       desenhar();
     }, 'Lendo…'));
   };
@@ -185,7 +187,7 @@ function telaTerminal(view) {
     if (!conectado()) { toast('Conecte primeiro (ou use o modo demo).', 'err'); return; }
     if (/^04$/.test(cmd.replace(/\s/g, '')) && !(await confirmar('Enviar 04?', 'O comando 04 apaga os códigos e zera os monitores. Use o botão da aba Erros, que verifica o motor desligado.', { perigo: true, textoOk: 'Enviar mesmo assim' }))) return;
     const r = await estado.elm.comando(cmd, { tentativas: 0, timeout: /^ATZ|^ATWS/.test(cmd) ? 4000 : config.timeout + 2000 });
-    if (/^ATSH|^ATCRA|^ATSP|^ATTP/.test(cmd)) { estado.elm.cabecalhoAtual = null; estado.elm.filtroAtual = null; }
+    if (/^ATSH|^ATCRA|^ATSP|^ATTP/.test(cmd)) { estado.elm.cabecalhoAtual = null; estado.elm.filtroAtual = null; estado.elm.fcAtual = null; }
     if (r.erro && r.erro.codigo === 'TIMEOUT') toast(r.erro.msg, 'err');
   };
   $('#frm', view).addEventListener('submit', (e) => { e.preventDefault(); const i = $('#cmd', view); enviar(i.value); i.value = ''; });
@@ -412,6 +414,7 @@ function telaRelatorios(view) {
       <div class="card"><h3>${icone('wrench')} Relatório técnico (para melhorar o app)</h3>
         <p class="small">Grava as respostas <b>brutas</b> do adaptador e das centrais: PIDs suportados, testes do modo 06, informações do modo 09 e a identificação/dados de cada módulo (motor, câmbio, ABS, airbag, BCM, painel e os achados na varredura). Com esse arquivo dá para ensinar o app a ler mais coisas do seu carro.</p>
         <p class="muted small">Dica: faça antes a <a href="#more/varredura">varredura completa</a>. Leva de 1 a 4 min. Só faz leituras.</p>
+        <label class="switch"><span class="t"><b>Exploração profunda</b><small>Procura blocos de dados extras em cada módulo (21 00–FF e 22 B0xx/F1xx). Leva de 5 a 10 min. Só leitura.</small></span><input type="checkbox" id="chkProfundo"></label>
         <button class="btn block" id="btnRelTecnico" ${conectado() && !rodando ? '' : 'disabled'}>${icone('download')} Gerar relatório técnico</button></div>
       ${prog ? `<div class="card"><div class="small">${escHtml(prog.texto)}</div><div class="progress" style="margin-top:8px"><div style="width:${prog.pct}%"></div></div></div>` : ''}
       ${!conectado() ? '<p class="muted small center">Conecte ao carro (ou ao modo demo) para coletar.</p>' : ''}`;
@@ -447,9 +450,10 @@ function telaRelatorios(view) {
     $('#btnRelTecnico', view)?.addEventListener('click', () => comCarregamento(null, async () => {
       rodando = true;
       try {
-        const rel = await coletarTecnico((texto, pct) => desenhar({ texto, pct }));
+        const profundo = !!$('#chkProfundo', view)?.checked;
+        const rel = await coletarTecnico((texto, pct) => desenhar({ texto, pct }), { profundo });
         const json = JSON.stringify(rel, null, 1);
-        const nome = `relatorio-tecnico-${carimbo()}.json`;
+        const nome = `relatorio-tecnico${rel.profundo ? '-profundo' : ''}-${carimbo()}.json`;
         const res = rel.resumo;
         const textoResumo = `Relatório técnico Cerato OBD2 ${rel.data}\nAdaptador: ${rel.adaptador.versao} | ${rel.adaptador.protocolo}\nPIDs modo 01: ${res.pids_modo01.join(' ')}\nMIDs modo 06: ${res.mids_modo06.join(' ') || 'nenhum'}\nModo 09: ${res.infos_modo09.join(' ') || 'nenhum'}\nMódulos que responderam: ${res.modulos_que_responderam.join(' ') || 'nenhum'}\nComandos: ${res.total_comandos}`;
         rodando = false;
@@ -470,4 +474,32 @@ function telaRelatorios(view) {
   };
   desenhar();
   return aoMudar(() => { if (!rodando) desenhar(); });
+}
+
+// ------------------------------------------------------------------ modo 06
+function telaTestes(view) {
+  let testes = null;
+  const fmt = (v) => (Math.abs(v) >= 100 || Number.isInteger(v) ? Math.round(v * 10) / 10 : Number(v.toPrecision(3))).toLocaleString('pt-BR');
+  const desenhar = () => {
+    let corpo;
+    if (!testes) corpo = vazio('chart', conectado() ? 'Toque em “Ler testes”.' : 'Conecte para ler os testes.');
+    else if (!testes.length) corpo = vazio('info', 'A central não informou resultados de testes (modo 06).');
+    else {
+      const grupos = {};
+      testes.forEach((t) => { (grupos[t.monitor] ||= []).push(t); });
+      corpo = Object.entries(grupos).map(([mon, ts]) => `<div class="card"><h3>${escHtml(mon)}</h3>${ts.map((t) => `
+        <div class="mon"><div><b>${escHtml(t.teste)}</b><div class="muted small">Valor ${escHtml(fmt(t.valor))} ${escHtml(t.unidade)} · limites ${escHtml(fmt(t.min))} a ${escHtml(fmt(t.max))}</div></div>
+        <span class="st ${t.passou ? (t.pertoDoLimite ? 'inc' : 'ok') : 'na'}" style="${t.passou ? '' : 'background:var(--bad);color:#fff'}">${t.passou ? (t.pertoDoLimite ? 'Perto do limite' : 'Aprovado') : 'Reprovado'}</span></div>`).join('')}</div>`).join('');
+    }
+    view.innerHTML = `<div class="card small">A central testa sozinha cada sistema enquanto você dirige e guarda o último resultado. Aqui aparece o valor medido e os limites de aprovação. <b>“Perto do limite”</b> = está passando, mas com menos de 15% de folga — bom sinal de alerta antes de virar código de erro.</div>
+      <button class="btn primary block" id="btnLer06" ${conectado() ? '' : 'disabled'} style="margin:12px 0">${icone('refresh')} Ler testes</button>${corpo}`;
+    $('#btnLer06', view).addEventListener('click', (e) => comCarregamento(e.currentTarget, async () => {
+      exigirConexao();
+      if (!estado.tab06) throw new Error('Tabela do modo 06 não carregada.');
+      testes = await estado.obd.lerModo06(estado.tab06);
+      desenhar();
+    }, 'Lendo…'));
+  };
+  desenhar();
+  return aoMudar(() => { if (!testes) desenhar(); });
 }

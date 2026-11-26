@@ -66,6 +66,25 @@ No Chrome: menu **⋮ › Instalar app** (ou “Adicionar à tela inicial”). D
 - **Mais › Varredura de módulos:** descobre quais endereços respondem no seu carro. Use o resultado para ajustar a tabela de módulos.
 - **Modo demo:** testa todas as telas sem o carro (Mais › Modo demonstração). Para testar o apagamento, desligue o “motor” simulado.
 
+## O que já foi confirmado num Cerato 2014 real
+
+Do relatório técnico de 26/11/2026 (adaptador ELM327 v1.5 clone, CAN 11 bit 500 kbps):
+
+| Endereço | Módulo | Protocolo | Identificação |
+|---|---|---|---|
+| 7E0 → 7E8 | Motor (ECM, Kefico) | OBD + KWP2000 (1A 80, 21 01, 21 02) | calibração `FCYD-CBL6PS01C00`, nome “ECM-Engine Control” |
+| 7E1 → 7E9 | Câmbio automático (TCM) | OBD + KWP2000 (1A 80) | peça 95440-26780, calibração `TYD0F16UA0` |
+| 7D1 → 7D9 | ABS | KWP2000 (1A 80, 21 01, 21 02) | “YD ABS”, peça 58920-A7100 |
+| 7D2 → 7DA | Airbag (SRS) | responde a 10 01 | — |
+| 7A0 → 7A8 | Carroceria (BCM) | UDS (22 F187/F193/F195) | peça 95400-A7140 |
+| 7C6 → 7CE | Painel | UDS (22 F187/F193/F195) | peça 94003-A7220 |
+| 771 → 779 | Caixa de junção (provável) | UDS | peça 91950-A7010 |
+| 7D4 → 7DC | Direção elétrica (provável) | KWP2000 (21 01, 21 06) | — |
+| 7B3 → 7BB | Ar-condicionado (provável) | só 3E 00 | — |
+| 7F1 → 7F9 | desconhecido | responde com NRC 22 | — |
+
+PIDs do modo 01 suportados pelo motor: 01 03 04 05 06 07 0B 0C 0D 0E 0F 11 13 14 15 1C 1F 21 2E 2F 30 31 33 3C 41–47 49 4A 4C 4F 56. O PID 52 (teor de etanol) **não** é informado por este carro. O modo 06 informa testes de sondas, catalisador, comando variável, purga do canister e aquecedores das sondas.
+
 ## Arquitetura
 
 HTML, CSS e JavaScript puros (ES modules), sem build e sem backend. Nenhuma dependência de CDN: ícones em SVG inline e gráfico em canvas próprio.
@@ -84,6 +103,7 @@ js/kia.js                                 UDS/KWP2000, endereços, NRC, varredur
 js/storage.js                             IndexedDB (leituras, sessões, configuração)
 js/settings.js, js/dtcdb.js, js/util.js   configuração, consulta ao banco, utilidades
 js/coleta.js                              coletas do relatório completo e do relatório técnico
+data/modo06.json                          nomes dos monitores/testes e unidades do modo 06
 js/ui/*.js                                telas (início, erros, ao vivo, histórico, mais), medidor, gráfico, relatório
 data/pids.json                            tabela declarativa de PIDs (pid, bytes, fórmula, unidade, mín., máx.)
 data/dtc-db.json                          banco de códigos em pt-BR (gerado)

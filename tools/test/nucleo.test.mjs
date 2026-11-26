@@ -4,12 +4,13 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { SimulatorTransport } from '../../js/transport/simulator.js';
 import { Elm327, parsearMensagens } from '../../js/elm327.js';
-import { Obd, TabelaPids, decodificarDtc } from '../../js/obd.js';
-import { Kia, MODULOS_PADRAO } from '../../js/kia.js';
+import { Obd, TabelaPids, decodificarDtc, decodificarModo06 } from '../../js/obd.js';
+import { Kia, MODULOS_PADRAO, textoAscii } from '../../js/kia.js';
 
 const raiz = new URL('../../', import.meta.url);
 const tabela = new TabelaPids(JSON.parse(readFileSync(new URL('data/pids.json', raiz))));
 const db = JSON.parse(readFileSync(new URL('data/dtc-db.json', raiz)));
+const tab06 = JSON.parse(readFileSync(new URL('data/modo06.json', raiz)));
 let ok = 0;
 const teste = async (nome, fn) => {
   try { await fn(); ok++; console.log('  ✔', nome); } catch (e) { console.error('  ✘', nome, '\n', e); process.exitCode = 1; }
@@ -42,6 +43,40 @@ await teste('K-line com cabeçalho e checksum', () => {
   assert.equal(msgs[0].ecu, '10');
   assert.deepEqual(msgs[0].dados, [0x43, 0x01, 0x33, 0x00, 0x00, 0x00, 0x00]);
 });
+console.log('\nRespostas reais do Cerato 2014 (relatório técnico)');
+await teste('Modo 06 real: catalisador aprovado perto do limite', () => {
+  const [m] = parsearMensagens(['7E8100A462180053680', '7E82100004000000000'], 6);
+  const [t] = decodificarModo06(m.dados, tab06);
+  assert.equal(t.monitor, 'Catalisador banco 1');
+  assert.ok(Math.abs(t.valor - 0.4255) < 0.001 && Math.abs(t.max - 0.4997) < 0.001);
+  assert.equal(t.passou, true);
+  assert.equal(t.pertoDoLimite, true);
+});
+await teste('Modo 06 real: sonda B1S1 (7 testes) e VVT com sinal', () => {
+  const [m] = parsearMensagens(['7E810404601010A0E67', '7E8210E670E6701020A', '7E8220E670E670E6701', '7E823070A000000000E', '7E8246701080A1DED0E', '7E8256724CF01091100', '7E826020000000A010A', '7E827100000000006D6', '7E8280189850200FC68', '7E82903980000000000'], 6);
+  const ts = decodificarModo06(m.dados, tab06);
+  assert.equal(ts.length, 7);
+  assert.ok(ts.every((t) => t.passou));
+  assert.ok(Math.abs(ts.find((t) => t.tid === '08').valor - 934.6) < 0.5); // tensão máxima em mV
+  const [v] = parsearMensagens(['7E8101346358A9DFFEF', '7E821FFDE0006358B9D', '7E822FFEFFFDE000600'], 6);
+  const vvt = decodificarModo06(v.dados, tab06);
+  assert.equal(vvt[0].valor, -8.5);
+  assert.equal(vvt[0].min, -17);
+});
+await teste('Identificação real dos módulos (ABS, BCM, ECM)', () => {
+  const [abs] = parsearMensagens(['7D9101D5A8059442041', '7D921425320FF203131', '7D92220120705203538', '7D9233932302D413731', '7D92430300000000000'], 6);
+  assert.ok(textoAscii(abs.dados.slice(2)).includes('58920-A7100'));
+  const [bcm] = parsearMensagens(['7A8100D62F187393534', '7A82130304137313430'], 6);
+  assert.deepEqual(textoAscii(bcm.dados.slice(3)), ['95400A7140']);
+  const [vin] = parsearMensagens(['7E810144902014B4E41', '7E821465A3431344245', '7E82235303631373638'], 6);
+  assert.equal(String.fromCharCode(...vin.dados.slice(3)), 'KNAFZ414BE5061768');
+});
+await teste('PID 56 de 1 byte (como o Cerato responde)', () => {
+  const r = new Map();
+  new Obd({ ehCan: true }, tabela)._decodificarMulti([0x56, 0xc8], '7E8', r);
+  assert.ok(Math.abs(r.get('56').valor - 56.25) < 0.01);
+});
+
 await teste('Banco de códigos: estrutura e cobertura', () => {
   const m = new Map(db.codigos.map((c) => [c.codigo, c]));
   for (const c of ['P0301', 'P0011', 'P0016', 'P0128', 'P0420', 'P0441', 'P0455', 'P0456', 'P2135', 'P2101', 'P0715', 'P0720', 'P0741', 'P0750', 'P0770', 'P0325', 'P0326', 'P0171', 'P0172']) {
@@ -122,9 +157,23 @@ for (const ruidoso of [false, true]) {
     assert.equal(r.protocolo, 'UDS');
     assert.equal(r.dtcs[0].codigo, 'C1201');
   });
-  await teste('Módulo SRS via KWP2000 (UDS recusado com NRC 11)', async () => {
+  await teste('Modo 06 e nomes das centrais', async () => {
+    const t = await obd.lerModo06(tab06);
+    assert.equal(t.length, 7 + 6 + 1 + 2 + 1 + 1 + 1);
+    assert.ok(t.find((x) => x.mid === '21').pertoDoLimite);
+    const nomes = await obd.lerNomesEcu();
+    assert.deepEqual(nomes.map((n) => n.nome).sort(), ['ECM-Engine Control', 'TCM-TransmisCtrl']);
+  });
+  await teste('Identificação de módulos (KWP 1A 80 e UDS 22 F187)', async () => {
+    const ecm = await kia.identificarModulo(MODULOS_PADRAO.find((m) => m.id === 'ecm'));
+    assert.ok(ecm.some((c) => /DEMO-CAL-GAMMA16/.test(c.valor)));
+    const bcm = await kia.identificarModulo(MODULOS_PADRAO.find((m) => m.id === 'bcm'));
+    assert.deepEqual(bcm[0], { campo: 'Número da peça', valor: '95400DEMO01' });
+  });
+  await teste('Módulo SRS via KWP2000 (18 02 recusado, 18 00 aceito)', async () => {
     const r = await kia.lerModulo(MODULOS_PADRAO.find((m) => m.id === 'srs'));
     assert.equal(r.protocolo, 'KWP2000');
+    assert.equal(r.comando, '1800FF00');
     assert.equal(r.dtcs[0].codigo, 'B1102');
     assert.ok(r.log.some((l) => /Serviço não suportado/.test(l)));
   });
@@ -138,6 +187,13 @@ for (const ruidoso of [false, true]) {
   await teste('Varredura rápida encontra os módulos', async () => {
     const achados = await kia.varrer({ lista: [0x7e0, 0x7e1, 0x7d1, 0x7d2, 0x7a0, 0x7c6, 0x7b0, 0x750] });
     assert.deepEqual(achados.map((a) => a.tx).sort(), ['7A0', '7C6', '7D1', '7D2', '7E0', '7E1']);
+  });
+  await teste('Leitura OBD simultânea à leitura de módulos (sem trocar endereço no meio)', async () => {
+    const mods = MODULOS_PADRAO.map((m) => kia.lerModulo(m).catch(() => null));
+    const rpms = [];
+    for (let i = 0; i < 6; i++) rpms.push(await obd.lerPids(['0C', '05']));
+    await Promise.all(mods);
+    assert.ok(rpms.every((r) => r.has('0C') && r.has('05')), 'alguma leitura OBD saiu com o endereço do módulo');
   });
   await teste('OBD volta a funcionar depois dos módulos', async () => {
     assert.equal((await obd.lerDtcs('03')).length, 4);

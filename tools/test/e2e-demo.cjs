@@ -145,6 +145,11 @@ const SHOTS = process.argv[3] || null;
     await page.waitForSelector('.mon');
     await shot('09-prontidao');
     await page.goBack();
+    await page.click('[data-sub="testes"]');
+    await page.click('#btnLer06');
+    await page.waitForFunction(() => /Perto do limite/.test(document.querySelector('#view').textContent), null, { timeout: 15000 });
+    await shot('09b-modo06');
+    await page.goBack();
     await page.click('[data-sub="veiculo"]');
     await page.click('#btnLerInfo');
     await page.waitForFunction(() => /DEMO-CAL-GAMMA16/.test(document.querySelector('#view').textContent), null, { timeout: 15000 });
@@ -186,7 +191,7 @@ const SHOTS = process.argv[3] || null;
     const [popup] = await Promise.all([page.waitForEvent('popup'), page.click('.modal .btn.primary')]);
     await popup.waitForLoadState();
     const t = await popup.textContent('body');
-    for (const trecho of ['Relatório completo do carro', 'KNAFX411BE5000000', 'DEMO-CAL-GAMMA16', 'Sensores no momento da coleta', 'Teor de etanol', 'Monitores de prontidão', 'Histórico', 'C1201']) {
+    for (const trecho of ['Relatório completo do carro', 'KNAFX411BE5000000', 'DEMO-CAL-GAMMA16', 'Sensores no momento da coleta', 'Teor de etanol', 'Monitores de prontidão', 'Histórico', 'C1201', 'Testes internos dos monitores', 'Catalisador banco 1', 'ECM-Engine Control', 'Identificação dos módulos']) {
       if (!t.includes(trecho)) throw new Error('relatório completo sem: ' + trecho);
     }
     await popup.close();

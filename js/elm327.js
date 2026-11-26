@@ -76,7 +76,10 @@ export class Elm327 {
    * opcoes: { timeout, tentativas }
    */
   comando(cmd, opcoes = {}) {
-    return this.enfileirar(() => this._executarComRetry(cmd, opcoes));
+    return this.enfileirar(async () => {
+      if (opcoes.alvo) await this._garantirAlvo(opcoes.alvo);
+      return this._executarComRetry(cmd, opcoes);
+    });
   }
 
   async _executarComRetry(cmd, opcoes) {
@@ -233,6 +236,7 @@ export class Elm327 {
     this.info.protocolo = (r.linhas[0] || PROTOCOLOS[this.info.protocoloNum] || '?').replace(/^AUTO,\s*/i, '');
     this.cabecalhoAtual = '7DF';
     this.filtroAtual = null;
+    this.fcAtual = null;
     this._emit('info', this.info);
     return this.info;
   }
@@ -250,35 +254,57 @@ export class Elm327 {
 
   // ------------------------------------------------------------ cabeçalhos (módulos)
   /** Direciona os próximos pedidos para um módulo específico (ATSH/ATCRA/ATFCSH). */
-  async definirAlvo(tx, rx) {
-    const T = tx.toUpperCase();
-    const R = rx ? rx.toUpperCase() : null;
+  /**
+   * Ajusta cabeçalho/filtro DENTRO de um trabalho da fila (não enfileira nada).
+   * alvo = { tx, rx, leve }. tx '7DF' = OBD padrão (todas as ECUs).
+   * leve = só ATSH/ATCRA (varredura), sem configurar o controle de fluxo.
+   */
+  async _garantirAlvo(alvo) {
+    const ex = (c) => this._executarComRetry(c, { tentativas: 1 });
+    const T = alvo.tx.toUpperCase();
+    if (T === '7DF') {
+      if (this.cabecalhoAtual === '7DF' && !this.filtroAtual) return;
+      await ex('ATSH7DF');
+      await ex('ATAR'); // desfaz o filtro ATCRA (clones não aceitam "ATCRA" sem parâmetro)
+      if (this.fcAtual) await ex('ATFCSM0');
+      this.cabecalhoAtual = '7DF';
+      this.filtroAtual = null;
+      this.fcAtual = null;
+      return;
+    }
     if (this.cabecalhoAtual !== T) {
-      await this.comando('ATSH' + T, { tentativas: 1 });
-      // controle de fluxo ISO-TP: o ELM responde "30 00 00" usando o mesmo endereço de envio
-      await this.comando('ATFCSH' + T, { tentativas: 0 });
-      await this.comando('ATFCSD300000', { tentativas: 0 });
-      await this.comando('ATFCSM1', { tentativas: 0 });
+      await ex('ATSH' + T);
       this.cabecalhoAtual = T;
     }
+    if (!alvo.leve && this.fcAtual !== T) {
+      // controle de fluxo ISO-TP: o ELM responde "30 00 00" usando o mesmo endereço de envio
+      await ex('ATFCSH' + T);
+      await ex('ATFCSD300000');
+      await ex('ATFCSM1');
+      this.fcAtual = T;
+    }
+    const R = alvo.rx ? alvo.rx.toUpperCase() : null;
     if (R && this.filtroAtual !== R) {
-      await this.comando('ATCRA' + R, { tentativas: 1 });
+      await ex('ATCRA' + R);
       this.filtroAtual = R;
     }
   }
 
-  /** Volta ao endereçamento OBD padrão (funcional 7DF, recebe de todas as ECUs). */
-  async restaurarPadrao() {
-    if (this.cabecalhoAtual === '7DF' && !this.filtroAtual) return;
-    await this.comando('ATSH7DF', { tentativas: 1 });
-    await this.comando('ATCRA', { tentativas: 0 });
-    await this.comando('ATAR', { tentativas: 0 });
-    await this.comando('ATFCSM0', { tentativas: 0 });
-    this.cabecalhoAtual = '7DF';
-    this.filtroAtual = null;
+  /** Direciona os próximos pedidos para um módulo (ATSH/ATCRA/ATFCSH). */
+  definirAlvo(tx, rx) {
+    return this.enfileirar(() => this._garantirAlvo({ tx, rx }));
   }
 
-  /** Envia um pedido OBD/UDS e devolve as mensagens já montadas por ECU. */
+  /** Volta ao endereçamento OBD padrão (funcional 7DF, recebe de todas as ECUs). */
+  restaurarPadrao() {
+    return this.enfileirar(() => this._garantirAlvo({ tx: '7DF' }));
+  }
+
+  /**
+   * Envia um pedido e devolve as mensagens já montadas por ECU.
+   * Com opcoes.alvo, troca o endereço e envia o pedido no MESMO trabalho da fila:
+   * nenhuma outra operação consegue mudar o cabeçalho no meio.
+   */
   async pedir(hex, opcoes = {}) {
     const r = await this.comando(hex, opcoes);
     const msgs = r.erro && r.linhas.length === 0 ? [] : parsearMensagens(r.linhas, this.info.protocoloNum ?? 6);

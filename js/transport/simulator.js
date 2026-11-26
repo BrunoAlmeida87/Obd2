@@ -34,15 +34,25 @@ const PIDS_MOTOR = [0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0b, 0x0c, 0x0d, 0x0e, 
   0x49, 0x4a, 0x4c, 0x51, 0x52];
 // PIDs que precisam aparecer como "ponte" para a próxima faixa
 const PONTES = [0x20, 0x40];
+// Respostas reais do modo 06 de um Cerato 2014 (relatório técnico), sem o byte 46
+const MODO06 = {
+  0x01: '01010a0e670e670e6701020a0e670e670e6701070a000000000e6701080a1ded0e6724cf0109110002000000 0a010a100000000006d60189850200fc680398',
+  0x02: '02010a14ce14ce14ce02020a14ce14ce14ce02070a000000000e6702080a1c7c0e67229102810a14ce14ce28cf02830a00000000 04cd',
+  0x21: '2180053680000040 00',
+  0x35: '358a9dffefffde0006358b9dffefffde0006',
+  0x3d: '3d88170000000000 00',
+  0x41: '41811400660000 0cc0',
+  0x42: '428114005a00000406'
+};
 const PIDS_FREEZE = [0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x11];
 
 // Módulos Kia simulados (tx -> comportamento)
 const MODULOS = {
-  0x7e0: { nome: 'ECM', proto: 'uds', dtcs: [['P0301', 0x00, 0x2f], ['P0171', 0x00, 0x28], ['P0420', 0x00, 0x08]] },
+  0x7e0: { nome: 'ECM', proto: 'uds', idKwp: 'DEMOTOOL KNAFX411BE5000000 DEMO-CAL-GAMMA16', dtcs: [['P0301', 0x00, 0x2f], ['P0171', 0x00, 0x28], ['P0420', 0x00, 0x08]] },
   0x7e1: { nome: 'TCM', proto: 'uds', dtcs: [['P0715', 0x00, 0x09]], pendente78: true },
   0x7d1: { nome: 'ABS/ESC', proto: 'uds', dtcs: [['C1201', 0x00, 0x09]] },
-  0x7d2: { nome: 'SRS', proto: 'kwp', dtcs: [['B1102', 0x00, 0x60]] },
-  0x7a0: { nome: 'BCM', proto: 'uds', dtcs: [] },
+  0x7d2: { nome: 'SRS', proto: 'kwp', soAceita1800: true, dtcs: [['B1102', 0x00, 0x60]] },
+  0x7a0: { nome: 'BCM', proto: 'uds', dtcs: [], pecaUds: '95400DEMO01' },
   0x7c6: { nome: 'Painel', proto: 'kwp', dtcs: [] }
 };
 
@@ -367,6 +377,14 @@ export class SimulatorTransport extends BaseTransport {
           }
           payload = [0x44];
         }
+      } else if (modo === 0x06) {
+        if (ecu === 0x7e8) {
+          const mid = bytes[1];
+          if (mid === 0x00) payload = [0x46, 0x00, 0xc0, 0x00, 0x00, 0x01];
+          else if (mid === 0x20) payload = [0x46, 0x20, 0x80, 0x00, 0x08, 0x09];
+          else if (mid === 0x40) payload = [0x46, 0x40, 0xc0, 0x00, 0x00, 0x00];
+          else if (MODO06[mid]) payload = [0x46, ...MODO06[mid].replace(/\s/g, '').match(/../g).map((x) => parseInt(x, 16))];
+        }
       } else if (modo === 0x09) {
         payload = this._modo09(bytes[1], ecu);
       }
@@ -387,9 +405,14 @@ export class SimulatorTransport extends BaseTransport {
   }
 
   _modo09(pid, ecu) {
-    if (ecu !== 0x7e8) return pid === 0x00 ? [0x49, 0x00, 0x14, 0x00, 0x00, 0x00] : null;
+    if (ecu !== 0x7e8) {
+      if (pid === 0x00) return [0x49, 0x00, 0x14, 0x40, 0x00, 0x00];
+      if (pid === 0x0a) return [0x49, 0x0a, 0x01, ...[...'TCM'].map((c) => c.charCodeAt(0)), 0, ...[...'-TransmisCtrl'].map((c) => c.charCodeAt(0)), 0, 0, 0];
+      return null;
+    }
     const ascii = (s) => [...s].map((c) => c.charCodeAt(0));
-    if (pid === 0x00) return [0x49, 0x00, ...mascara([0x02, 0x04, 0x06], 0)];
+    if (pid === 0x00) return [0x49, 0x00, ...mascara([0x02, 0x04, 0x06, 0x0a], 0)];
+    if (pid === 0x0a) return [0x49, 0x0a, 0x01, ...ascii('ECM'), 0, ...ascii('-Engine Control'), 0];
     if (pid === 0x02) return [0x49, 0x02, 0x01, ...ascii('KNAFX411BE5000000')];
     if (pid === 0x04) return [0x49, 0x04, 0x01, ...ascii('DEMO-CAL-GAMMA16').slice(0, 16)];
     if (pid === 0x06) return [0x49, 0x06, 0x01, 0x3a, 0x5c, 0x91, 0x0e];
@@ -423,6 +446,7 @@ export class SimulatorTransport extends BaseTransport {
       }
     } else if (sid === 0x18) {
       if (m.proto !== 'kwp') p = neg(0x11);
+      else if (m.soAceita1800 && bytes[1] !== 0x00) p = neg(0x12); // como o ABS/ECM reais: formato 18 02 recusado
       else {
         p = [0x58, m.dtcs.length];
         m.dtcs.forEach(([c, , st]) => p.push(...dtcBytes(c), st));
@@ -430,6 +454,10 @@ export class SimulatorTransport extends BaseTransport {
     } else if (sid === 0x14) {
       m.dtcs = [];
       p = m.proto === 'uds' ? [0x54] : [0x54, 0xff, 0x00];
+    } else if (sid === 0x1a && bytes[1] === 0x80 && m.idKwp) {
+      p = [0x5a, 0x80, ...[...m.idKwp].map((c) => c.charCodeAt(0))];
+    } else if (sid === 0x22 && bytes[1] === 0xf1 && bytes[2] === 0x87 && m.pecaUds) {
+      p = [0x62, 0xf1, 0x87, ...[...m.pecaUds].map((c) => c.charCodeAt(0))];
     } else if (sid === 0x22 || sid === 0x1a || sid === 0x21) {
       p = neg(0x31);
     } else {

@@ -2,6 +2,7 @@
  * As fórmulas dos PIDs vêm de data/pids.json (tabela declarativa). */
 
 const hex2 = (n) => n.toString(16).toUpperCase().padStart(2, '0');
+const ALVO_OBD = { tx: '7DF' };
 
 /** Decodifica 2 bytes de DTC: bits 7-6 = P/C/B/U, bits 5-4 = 1º dígito, resto = 3 dígitos hex. */
 export function decodificarDtc(a, b) {
@@ -73,6 +74,11 @@ export class Obd {
     this.multiPid = true; // pedir até 6 PIDs por vez (CAN)
   }
 
+  /** Pedido OBD padrão (7DF, todas as ECUs), atômico com a troca de cabeçalho. */
+  _pedirObd(hex, opcoes = {}) {
+    return this.elm.pedir(hex, { alvo: ALVO_OBD, ...opcoes });
+  }
+
   _respostas(r, sidEsperado) {
     return r.msgs.filter((m) => m.dados[0] === sidEsperado);
   }
@@ -93,7 +99,7 @@ export class Obd {
     this.suportados.clear();
     this.suportadosUniao.clear();
     for (const base of [0x00, 0x20, 0x40, 0x60, 0x80, 0xa0, 0xc0]) {
-      const r = await this.elm.pedir('01' + hex2(base), { timeout: 3000 });
+      const r = await this._pedirObd('01' + hex2(base), { timeout: 3000 });
       const resp = this._respostas(r, 0x41).filter((m) => m.dados[1] === base);
       if (!resp.length) {
         if (base === 0) this._verificar(r);
@@ -130,7 +136,7 @@ export class Obd {
     const grupoMax = this.multiPid && this.elm.ehCan ? 6 : 1;
     for (let i = 0; i < lista.length; i += grupoMax) {
       const grupo = lista.slice(i, i + grupoMax);
-      const r = await this.elm.pedir('01' + grupo.join(''), { tentativas: 1 });
+      const r = await this._pedirObd('01' + grupo.join(''), { tentativas: 1 });
       if (r.erro && !r.msgs.length) {
         if (r.erro.codigo === 'NO_DATA' && grupo.length > 1) {
           // alguma ECU não aceita multi-PID: cai para um por vez
@@ -172,7 +178,7 @@ export class Obd {
   /** Modo 01 PID 01: MIL, número de DTCs e monitores de prontidão por ECU. */
   async lerStatus() {
     await this.elm.restaurarPadrao();
-    const r = await this.elm.pedir('0101');
+    const r = await this._pedirObd('0101');
     this._verificar(r);
     const mons = this.tab.json.monitores;
     const porEcu = [];
@@ -211,7 +217,7 @@ export class Obd {
   async lerDtcs(modo = '03') {
     await this.elm.restaurarPadrao();
     const sid = parseInt(modo, 16) + 0x40;
-    const r = await this.elm.pedir(modo, { timeout: 4000 });
+    const r = await this._pedirObd(modo, { timeout: 4000 });
     if (r.erro && !r.msgs.length) {
       if (r.erro.codigo === 'NO_DATA') return []; // nenhuma ECU com códigos (ou modo não suportado)
       throw new ErroObd(r.erro.msg, r.erro.codigo);
@@ -243,7 +249,7 @@ export class Obd {
   /** Freeze frame (quadro 00): DTC que causou e valores congelados. */
   async lerFreezeFrame() {
     await this.elm.restaurarPadrao();
-    const r = await this.elm.pedir('020200');
+    const r = await this._pedirObd('020200');
     const resp = this._respostas(r, 0x42).find((m) => m.dados[1] === 0x02);
     if (!resp) return null;
     const [a, b] = resp.dados.slice(3, 5);
@@ -254,7 +260,7 @@ export class Obd {
     // descobre quais PIDs existem no freeze frame
     const suportados = [];
     for (const base of [0x00, 0x20, 0x40]) {
-      const rs = await this.elm.pedir('02' + hex2(base) + '00');
+      const rs = await this._pedirObd('02' + hex2(base) + '00');
       const m = this._respostas(rs, 0x42).find((x) => x.ecu === ecu && x.dados[1] === base);
       if (!m) break;
       const mascara = m.dados.slice(3, 7);
@@ -266,7 +272,7 @@ export class Obd {
     for (const pid of lista) {
       const def = this.tab.get(pid);
       if (!def || def.tipo === 'especial' || pid === '02' || /^(20|40|60)$/.test(pid)) continue;
-      const rv = await this.elm.pedir('02' + pid + '00', { tentativas: 0 });
+      const rv = await this._pedirObd('02' + pid + '00', { tentativas: 0 });
       const m = this._respostas(rv, 0x42).find((x) => x.ecu === ecu && hex2(x.dados[1]) === pid);
       if (!m) continue;
       const dec = this.tab.decodificar(pid, m.dados.slice(3, 3 + (def.bytes || 1)));
@@ -289,7 +295,7 @@ export class Obd {
   /** Modo 04: apaga DTCs e zera monitores de prontidão. */
   async apagarDtcs() {
     await this.elm.restaurarPadrao();
-    const r = await this.elm.pedir('04', { timeout: 5000, tentativas: 0 });
+    const r = await this._pedirObd('04', { timeout: 5000, tentativas: 0 });
     const neg = this._negativas(r);
     if (neg.length) {
       const nrc = neg[0].dados[2];
@@ -305,7 +311,7 @@ export class Obd {
   // ------------------------------------------------------------------ modo 09
   async _modo09(pid) {
     await this.elm.restaurarPadrao();
-    const r = await this.elm.pedir('09' + pid, { timeout: 4000 });
+    const r = await this._pedirObd('09' + pid, { timeout: 4000 });
     return this._respostas(r, 0x49).filter((m) => hex2(m.dados[1]) === pid);
   }
 
@@ -350,3 +356,87 @@ export class Obd {
     return saida;
   }
 }
+
+// ===================================================================== modo 06
+/**
+ * Decodifica uma resposta CAN do modo 06: 46 [MID TID UASID VALOR(2) MIN(2) MAX(2)] ...
+ * tab = data/modo06.json. Retorna um teste por registro, com aprovação e margem.
+ */
+export function decodificarModo06(dados, tab) {
+  const out = [];
+  const d = dados.slice(1);
+  for (let i = 0; i + 8 < d.length; i += 9) {
+    const [mid, tid, uas, v1, v2, n1, n2, x1, x2] = d.slice(i, i + 9);
+    const u = tab.uasid[hex2(uas)] || { escala: 1, unidade: '' };
+    const w = (h, l) => {
+      let n = h * 256 + l;
+      if (u.sinal && n >= 32768) n -= 65536;
+      return n * u.escala + (u.offset || 0);
+    };
+    const valor = w(v1, v2);
+    const min = w(n1, n2);
+    const max = w(x1, x2);
+    const passou = valor >= min - 1e-9 && valor <= max + 1e-9;
+    // posição do valor entre os limites (0 = no mínimo, 1 = no máximo)
+    const pos = max > min ? (valor - min) / (max - min) : null;
+    const nomeTid = mid <= 0x10 && tab.tids_sonda[hex2(tid)] ? tab.tids_sonda[hex2(tid)] : tid >= 0x80 ? `Teste do fabricante ${hex2(tid)}` : `Teste ${hex2(tid)}`;
+    out.push({
+      mid: hex2(mid), tid: hex2(tid), uasid: hex2(uas),
+      monitor: tab.mids[hex2(mid)] || `Monitor ${hex2(mid)}`,
+      teste: nomeTid,
+      valor, min, max, unidade: u.unidade,
+      passou,
+      // a menos de 15% de um dos limites (o mínimo só conta se não for zero)
+      pertoDoLimite: passou && pos !== null && (pos > 0.85 || (min !== 0 && pos < 0.15))
+    });
+  }
+  return out;
+}
+
+/** Lê quais IDs de um modo são suportados (máscaras 00, 20, 40...). */
+Obd.prototype._suportadosModo = async function (modo, ecu = null) {
+  const ids = [];
+  for (let base = 0; base <= 0xe0; base += 0x20) {
+    const r = await this._pedirObd(modo + hex2(base), { tentativas: 0 });
+    const sid = parseInt(modo, 16) + 0x40;
+    const resp = this._respostas(r, sid).filter((m) => m.dados[1] === base && (!ecu || m.ecu === ecu));
+    if (!resp.length) break;
+    let continua = false;
+    for (const m of resp) {
+      const mask = m.dados.slice(2, 6);
+      for (let i = 0; i < 32; i++) {
+        if (mask[i >> 3] & (0x80 >> (i & 7))) {
+          const id = base + i + 1;
+          if ((id & 0x1f) === 0) { if (id === base + 0x20) continua = true; continue; }
+          if (!ids.includes(hex2(id))) ids.push(hex2(id));
+        }
+      }
+    }
+    if (!continua) break;
+  }
+  return ids;
+};
+
+/** Modo 06: resultados dos testes dos monitores de todas as centrais. */
+Obd.prototype.lerModo06 = async function (tab06) {
+  await this.elm.restaurarPadrao();
+  const mids = await this._suportadosModo('06');
+  const testes = [];
+  for (const mid of mids) {
+    const r = await this._pedirObd('06' + mid, { tentativas: 1 });
+    for (const m of this._respostas(r, 0x46)) {
+      if (hex2(m.dados[1]) !== mid) continue;
+      decodificarModo06(m.dados, tab06).forEach((t) => testes.push({ ...t, ecu: m.ecu }));
+    }
+  }
+  return testes;
+};
+
+/** Modo 09 PID 0A: nome de cada central (ex.: "ECM-Engine Control"). */
+Obd.prototype.lerNomesEcu = async function () {
+  const msgs = await this._modo09('0A');
+  return msgs.map((m) => ({
+    ecu: m.ecu,
+    nome: String.fromCharCode(...m.dados.slice(3).filter((b) => b >= 0x20 && b < 0x7f)).replace(/\s+/g, ' ').trim()
+  })).filter((x) => x.nome);
+};

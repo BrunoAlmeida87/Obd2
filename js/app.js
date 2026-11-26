@@ -105,6 +105,8 @@ export async function conectar(tipo = config.transporte) {
     estado.progresso = 'Descobrindo PIDs suportados…';
     notificar();
     try { await estado.obd.descobrirPids(); } catch (e) { console.warn('PIDs', e); }
+    // a central do câmbio automático (7E9) responde ao OBD: preenche o câmbio se estiver vazio
+    if (!config.cambio && estado.obd.suportados.has('7E9')) salvarConfig({ cambio: 'automatico' });
     estado.progresso = 'Lendo VIN e status…';
     notificar();
     try { estado.vin = await estado.obd.lerVin(); } catch (e) { console.warn('VIN', e); }
@@ -230,6 +232,7 @@ async function iniciar() {
     toast('Falha ao carregar a tabela de PIDs.', 'err');
   }
   carregarDtcDb().catch(() => toast('Falha ao carregar o banco de códigos.', 'err'));
+  fetch('data/modo06.json').then((r) => r.json()).then((j) => { estado.tab06 = j; }).catch(() => {});
 
   const apis = apisDisponiveis();
   if (!apis.serial && !apis.ble) {

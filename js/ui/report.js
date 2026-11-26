@@ -10,6 +10,7 @@ const CATS = [['armazenados', 'Armazenados (modo 03)', 'Confirmados. Normalmente
   ['pendentes', 'Pendentes (modo 07)', 'Detectados uma vez, ainda não confirmados. Podem virar armazenados.'],
   ['permanentes', 'Permanentes (modo 0A)', 'Não apagam pelo scanner; somem sozinhos quando o carro confirma o reparo.']];
 const SEV = { alta: 'GRAVE', media: 'ATENÇÃO', baixa: 'LEVE' };
+const fmt06 = (v) => (Math.abs(v) >= 100 || Number.isInteger(v) ? Math.round(v * 10) / 10 : Number(v.toPrecision(3))).toLocaleString('pt-BR');
 
 const CSS = `
 body{font:14px/1.45 system-ui,sans-serif;color:#111;margin:24px;max-width:960px}
@@ -126,17 +127,25 @@ export function gerarRelatorioCompletoHtml(l, leituras = [], comparacao = null) 
     ${Object.entries(grupos).map(([g, vs]) => `<h3>${escHtml(g)}</h3><table>${vs.map((v) => `<tr><td>${escHtml(v.nome)} <span class="s mono">(01 ${escHtml(v.pid)})</span></td><td class="num"><b>${escHtml(v.texto)}</b> ${escHtml(v.unidade)}${v.extra ? `<div class="s">${escHtml(v.extra)}</div>` : ''}</td></tr>`).join('')}</table>`).join('')}` : '';
   const ident = `<h2>Identificação do veículo e das centrais</h2><table>
     <tr><td>VIN</td><td class="mono">${escHtml(l.vin || '—')}</td></tr>
+    ${(l.nomesEcu || []).map((n) => `<tr><td>Nome da central ${escHtml(n.ecu)}</td><td>${escHtml(n.nome)}</td></tr>`).join('')}
     ${(l.calid || []).map((c) => `<tr><td>Calibração (CALID) · ECU ${escHtml(c.ecu)}</td><td class="mono">${escHtml(c.calid)}</td></tr>`).join('')}
     ${(l.cvn || []).map((c) => `<tr><td>Verificação de calibração (CVN) · ECU ${escHtml(c.ecu)}</td><td class="mono">${escHtml(c.cvn)}</td></tr>`).join('')}
     ${(l.status?.porEcu || []).map((e) => `<tr><td>Central ${escHtml(e.ecu)}</td><td>${e.qtdDtc} código(s) confirmado(s)${e.mil ? ' · pediu a luz de injeção' : ''}</td></tr>`).join('')}
     <tr><td>Adaptador</td><td>${escHtml(l.info?.versao || l.elm || '—')} · ${escHtml(l.info?.dispositivo || '')}</td></tr>
     <tr><td>Protocolo</td><td>${escHtml(l.protocolo || '—')}</td></tr>
     <tr><td>Conexão</td><td>${escHtml(l.transporte || '—')}</td></tr></table>`;
+  const t06 = l.modo06 || [];
+  const secModo06 = t06.length ? `<h2>Testes internos dos monitores (modo 06)</h2>
+    <p class="s">Resultados dos últimos testes que a central fez em cada sistema. “Aprovado perto do limite” indica um componente que está passando, mas com pouca folga.</p>
+    <table><tr><th>Sistema / teste</th><th>Valor</th><th>Limites</th><th>Resultado</th></tr>
+    ${t06.map((t) => `<tr><td>${escHtml(t.monitor)}<div class="s">${escHtml(t.teste)} · ECU ${escHtml(t.ecu)}</div></td><td class="num">${escHtml(fmt06(t.valor))} ${escHtml(t.unidade)}</td><td class="num s">${escHtml(fmt06(t.min))} a ${escHtml(fmt06(t.max))}</td><td class="${t.passou ? (t.pertoDoLimite ? '' : 'ok') : 'ruim'}">${t.passou ? (t.pertoDoLimite ? '<b>Aprovado perto do limite</b>' : 'Aprovado') : 'REPROVADO'}</td></tr>`).join('')}</table>` : '';
+  const ids = (l.dtcs?.modulos || []).filter((m) => m.identificacao?.length);
+  const secIds = ids.length ? `<h2>Identificação dos módulos</h2><table>${ids.map((m) => `<tr><td>${escHtml(m.modulo.nome)} <span class="s mono">(${escHtml(m.modulo.tx)})</span></td><td class="s">${m.identificacao.map((c) => `${escHtml(c.campo)}: <span class="mono">${escHtml(c.valor)}</span>`).join('<br>')}</td></tr>`).join('')}</table>` : '';
   const pids = l.pidsSuportados ? `<h2>PIDs suportados pelas centrais (modo 01)</h2><table>${Object.entries(l.pidsSuportados).map(([ecu, ps]) => `<tr><td>ECU ${escHtml(ecu)} (${ps.length})</td><td class="mono s">${escHtml(ps.join(' '))}</td></tr>`).join('')}</table>` : '';
   const hist = leituras.filter((x) => x.tipo === 'leitura' || x.tipo === 'apagamento').slice(0, 30);
   const secHist = hist.length ? `<h2>Histórico (últimos ${hist.length} registros)</h2><table><tr><th>Data</th><th>Km</th><th>Evento</th><th>Códigos</th></tr>
     ${hist.map((x) => { const cods = [...new Set(todosCodigos(x.tipo === 'apagamento' ? { dtcs: x.apagados || {} } : x).map((c) => c.codigo))]; return `<tr><td>${escHtml(dataHora(x.data))}</td><td>${x.km ? escHtml(Number(x.km).toLocaleString('pt-BR')) : '—'}</td><td>${x.tipo === 'apagamento' ? 'Códigos apagados' : 'Leitura' + (x.demo ? ' (demo)' : '')}</td><td class="mono s">${escHtml(cods.join(' ') || 'nenhum')}</td></tr>`; }).join('')}</table>` : '';
-  return cabecalho('Relatório completo do carro — OBD2', l) + resumo(l) + ident + secaoComparacao(comparacao) + secaoCodigos(l) + secaoFreeze(l) + secaoMonitores(l) + secValores + pids + secHist + RODAPE;
+  return cabecalho('Relatório completo do carro — OBD2', l) + resumo(l) + ident + secaoComparacao(comparacao) + secaoCodigos(l) + secaoFreeze(l) + secaoMonitores(l) + secModo06 + secValores + secIds + pids + secHist + RODAPE;
 }
 
 function gerar(l, leituras, comparacao) {

@@ -125,7 +125,7 @@ function htmlModulos() {
     }
     const bloqueado = m.critico && !config.permitirApagarCriticos;
     return `<div class="card" data-mod="${escHtml(m.id)}">
-      <div class="row between"><div><b>${escHtml(m.nome)}</b> <span class="muted small mono">${escHtml(m.tx)}→${escHtml(m.rx)}</span></div>
+      <div class="row between"><div><b>${escHtml(m.nome)}</b> <span class="muted small mono">${escHtml(m.tx)}→${escHtml(m.rx)}</span>${m.nota ? `<div class="muted small">${escHtml(m.nota)}</div>` : ''}</div>
       ${m.critico ? '<span class="tag alta">crítico</span>' : ''}</div>
       <div style="margin:8px 0">${conteudo}</div>
       <div class="btn-grid">
