@@ -219,6 +219,23 @@ const SHOTS = process.argv[3] || null;
     await page.click('.modal .btn.ghost');
   });
 
+  await passo('Gravação guiada (2 etapas e salvar)', async () => {
+    await page.click('[data-tab="more"]');
+    await page.click('[data-sub="guiada"]');
+    await page.click('#btnIniciarG');
+    await page.waitForSelector('#btnGravarG', { timeout: 15000 });
+    await page.click('#btnGravarG');
+    await page.waitForSelector('#btnPararG');
+    await page.waitForTimeout(4000);
+    await page.click('#btnPararG');
+    await page.waitForSelector('#btnGravarG', { timeout: 20000 });
+    await page.click('#btnPularG');
+    const [down] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), (async () => { await page.click('#btnTerminarG'); await page.click('#btnSalvarG'); })()]);
+    const rel = JSON.parse(require('fs').readFileSync(await down.path(), 'utf8'));
+    if (rel.tipo !== 'gravacao-guiada' || rel.etapas[0].id !== 'base' || !rel.amostras.length || rel.amostras[0].etapa !== 'base') throw new Error('arquivo guiado inválido');
+    await page.click('.modal .btn.ghost');
+  });
+
   await passo('Persistência após recarregar', async () => {
     await page.reload();
     await page.click('[data-tab="history"]');

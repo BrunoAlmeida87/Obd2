@@ -10,7 +10,7 @@ import { salvarLeitura } from './storage.js';
 import { parsearMensagens } from './elm327.js';
 import { horaMs } from './util.js';
 
-export const VERSAO_APP = '1.3.0';
+export const VERSAO_APP = '1.4.0';
 const hex2 = (n) => n.toString(16).toUpperCase().padStart(2, '0');
 
 async function tentar(fn, padrao = null) {
@@ -307,6 +307,57 @@ export async function coletarCorrelacao(progresso = () => {}, { minutos = 3, dev
     minutos,
     pidsObd,
     blocos: BLOCOS_CONHECIDOS,
+    amostras
+  };
+}
+
+// ===================================================================== gravação guiada
+/** Abre a sessão 10 81 nos módulos KWP2000 da gravação guiada. */
+export async function prepararGuiada(cfg) {
+  exigirConexao();
+  for (const b of cfg.blocos) {
+    if (b.cmds[0].startsWith('21')) await estado.elm.comando('1081', { alvo: { tx: b.tx, rx: b.rx }, tentativas: 0, timeout: 1500 });
+  }
+}
+
+/**
+ * Grava uma etapa: repete a leitura dos blocos por `segundos`, marcando cada amostra com a etapa.
+ * onAmostra(n, restanteMs) é chamado a cada ciclo. Somente leitura.
+ */
+export async function gravarEtapa(cfg, etapa, segundos, { onAmostra = () => {}, deveParar = () => false, inicioSessao = Date.now() } = {}) {
+  exigirConexao();
+  const { elm, obd } = estado;
+  const hexs = (b) => b.map((x) => x.toString(16).toUpperCase().padStart(2, '0')).join('');
+  const pidsObd = ['0C', '0D', '05', '11', '42'].filter((p) => obd.suporta(p));
+  const fim = Date.now() + segundos * 1000;
+  const amostras = [];
+  while (Date.now() < fim && !deveParar()) {
+    const a = { t: Date.now() - inicioSessao, etapa: etapa.id, obd: {}, blocos: {} };
+    const r = await tentar(() => obd.lerPids(pidsObd), new Map());
+    r.forEach((v, pid) => { if (typeof v.valor === 'number') a.obd[pid] = Math.round(v.valor * 1000) / 1000; });
+    for (const b of cfg.blocos) {
+      for (const c of b.cmds) {
+        if (deveParar()) break;
+        const resp = await elm.pedir(c, { alvo: { tx: b.tx, rx: b.rx }, tentativas: 0, timeout: 1500 });
+        const m = resp.msgs.find((x) => x.dados[0] !== 0x7f);
+        a.blocos[`${b.tx}:${c}`] = m ? hexs(m.dados) : null;
+      }
+    }
+    amostras.push(a);
+    onAmostra(amostras.length, Math.max(0, fim - Date.now()));
+  }
+  return amostras;
+}
+
+export function montarArquivoGuiado(cfg, etapasFeitas, amostras, inicio) {
+  return {
+    app: 'cerato-obd',
+    tipo: 'gravacao-guiada',
+    versao_app: VERSAO_APP,
+    data: new Date(inicio).toISOString(),
+    vin: estado.vin,
+    blocos: cfg.blocos,
+    etapas: etapasFeitas,
     amostras
   };
 }

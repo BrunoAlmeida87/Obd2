@@ -8,12 +8,13 @@ import { apagarTudo } from '../storage.js';
 import { el, $, $$, icone, escHtml, modal, confirmar, toast, vazio, comCarregamento } from './dom.js';
 import { abrirDetalhe } from './dtc.js';
 import { horaMs, copiarTexto, baixarArquivo, carimbo } from '../util.js';
-import { coletarCompleto, coletarTecnico, coletarCorrelacao } from '../coleta.js';
+import { coletarCompleto, coletarTecnico, coletarCorrelacao, prepararGuiada, gravarEtapa, montarArquivoGuiado } from '../coleta.js';
 import { gerarRelatorioHtml, gerarRelatorioCompletoHtml, abrirHtml } from './report.js';
 import { listarLeituras } from '../storage.js';
 import { comparar } from './history.js';
 
 const SUBTELAS = {
+  guiada: { titulo: 'Gravação guiada', icone: 'record', desc: 'Passo a passo com o carro parado para decodificar mais dados', fn: telaGuiada },
   relatorios: { titulo: 'Relatórios', icone: 'printer', desc: 'Erros, carro completo e relatório técnico para melhorar o app', fn: telaRelatorios },
   testes: { titulo: 'Testes dos monitores (modo 06)', icone: 'chart', desc: 'Resultado dos testes internos: catalisador, sondas, comando variável', fn: telaTestes },
   prontidao: { titulo: 'Prontidão (monitores)', icone: 'shield', desc: 'Monitores completos/incompletos e luz de injeção', fn: telaProntidao },
@@ -532,4 +533,106 @@ function telaTestes(view) {
   };
   desenhar();
   return aoMudar(() => { if (!testes) desenhar(); });
+}
+
+// ------------------------------------------------------------------ gravação guiada
+function telaGuiada(view) {
+  let cfg = null;
+  let idx = 0;
+  let iniciado = false;
+  let gravando = false;
+  let parar = false;
+  let inicio = 0;
+  let amostras = [];
+  const feitas = [];
+  let trava = null;
+  let status = '';
+  let ativo = true;
+
+  const salvar = () => {
+    const arq = montarArquivoGuiado(cfg, feitas, amostras, inicio);
+    const json = JSON.stringify(arq);
+    const nome = `gravacao-guiada-${carimbo()}.json`;
+    baixarArquivo(nome, json, 'application/json');
+    try { trava?.release(); } catch { /* ignora */ }
+    trava = null;
+    modal({
+      titulo: 'Gravação guiada salva',
+      conteudo: `<p>${feitas.length} etapa(s), ${amostras.length} amostras. O arquivo <b>${escHtml(nome)}</b> foi baixado (pasta Downloads). Envie esse arquivo na conversa com o Claude.</p>`,
+      botoes: [{ texto: 'Fechar', classe: 'ghost' }, { texto: 'Baixar de novo', icone: 'download', aoClicar: () => { baixarArquivo(nome, json, 'application/json'); return false; } }]
+    });
+  };
+
+  const desenhar = () => {
+    if (!ativo) return;
+    if (!cfg) { view.innerHTML = vazio('record', 'Carregando etapas…'); return; }
+    const total = cfg.etapas.length;
+    const etapa = cfg.etapas[idx];
+    if (!iniciado) {
+      view.innerHTML = `
+        <div class="card"><h3>${icone('alert')} Antes de começar</h3><p class="small"><b>${escHtml(cfg.seguranca)}</b></p>
+          <p class="small">São ${total} etapas de ~${cfg.segundos_padrao} s (uns 15 minutos no total). Em cada uma o app mostra o que fazer: faça a ação, depois toque em <b>“Feito, gravar”</b> e não mexa em mais nada até a gravação da etapa terminar. Se o carro não tiver aquele item, toque em <b>Pular</b>. Só leitura: nada é alterado no carro.</p></div>
+        <button class="btn primary big" id="btnIniciarG" ${conectado() ? '' : 'disabled'}>${icone('play')} Começar</button>
+        ${!conectado() ? '<p class="muted small center">Conecte ao carro primeiro (motor ligado).</p>' : ''}`;
+      $('#btnIniciarG', view)?.addEventListener('click', (e) => comCarregamento(e.currentTarget, async () => {
+        await prepararGuiada(cfg);
+        try { trava = await navigator.wakeLock?.request('screen'); } catch { /* sem wake lock */ }
+        inicio = Date.now();
+        iniciado = true;
+        desenhar();
+      }, 'Preparando…'));
+      return;
+    }
+    if (idx >= total) {
+      view.innerHTML = `<div class="card center"><h3>${icone('check')} Todas as etapas concluídas</h3><p class="small">${feitas.length} etapa(s) gravada(s), ${amostras.length} amostras.</p></div>
+        <button class="btn primary big" id="btnSalvarG">${icone('download')} Salvar arquivo</button>`;
+      $('#btnSalvarG', view).addEventListener('click', salvar);
+      return;
+    }
+    view.innerHTML = `
+      <div class="row between small muted" style="margin-bottom:6px"><span>Etapa ${idx + 1} de ${total}</span><span>${feitas.length} gravada(s)</span></div>
+      <div class="progress" style="margin-bottom:12px"><div style="width:${(idx / total * 100).toFixed(1)}%"></div></div>
+      <div class="card" style="border-color:var(--accent)">
+        <div style="font-size:1.5rem;font-weight:800;margin-bottom:8px">${escHtml(etapa.titulo)}</div>
+        <p style="font-size:1.1rem;margin:0">${escHtml(etapa.instrucao)}</p>
+      </div>
+      ${gravando
+        ? `<div class="card center"><div class="row" style="justify-content:center"><span class="rec-dot"></span><b>Gravando… não mexa em nada</b></div><div class="small muted" style="margin-top:6px">${escHtml(status)}</div></div>
+           <button class="btn danger block" id="btnPararG">${icone('stop')} Parar esta etapa</button>`
+        : `<button class="btn primary big" id="btnGravarG" ${conectado() ? '' : 'disabled'}>${icone('record')} Feito, gravar ${cfg.segundos_padrao} s</button>
+           <div class="btn-grid" style="margin-top:10px">
+             <button class="btn" id="btnVoltarG" ${idx === 0 ? 'disabled' : ''}>${icone('back')} Etapa anterior</button>
+             <button class="btn" id="btnPularG">${icone('next')} Pular</button>
+           </div>
+           <button class="btn ghost block" id="btnTerminarG" style="margin-top:10px" ${feitas.length ? '' : 'disabled'}>${icone('download')} Terminar agora e salvar</button>`}`;
+    $('#btnPararG', view)?.addEventListener('click', () => { parar = true; });
+    $('#btnPularG', view)?.addEventListener('click', () => { idx++; desenhar(); });
+    $('#btnVoltarG', view)?.addEventListener('click', () => { idx = Math.max(0, idx - 1); desenhar(); });
+    $('#btnTerminarG', view)?.addEventListener('click', () => { idx = total; desenhar(); });
+    $('#btnGravarG', view)?.addEventListener('click', () => comCarregamento(null, async () => {
+      gravando = true;
+      parar = false;
+      status = 'Iniciando…';
+      desenhar();
+      try {
+        const novas = await gravarEtapa(cfg, etapa, cfg.segundos_padrao, {
+          inicioSessao: inicio,
+          deveParar: () => parar,
+          onAmostra: (n, resta) => { status = `${n} amostra(s) · faltam ${Math.ceil(resta / 1000)} s`; const el = view.querySelector('.card.center .small'); if (el) el.textContent = status; }
+        });
+        amostras = amostras.concat(novas);
+        if (novas.length) feitas.push({ id: etapa.id, titulo: etapa.titulo, amostras: novas.length });
+        try { navigator.vibrate?.([150, 80, 150]); } catch { /* ignora */ }
+        idx++;
+      } finally {
+        gravando = false;
+        desenhar();
+      }
+    }));
+  };
+
+  fetch('data/etapas-guiadas.json').then((r) => r.json()).then((j) => { cfg = j; desenhar(); }).catch(() => { view.innerHTML = vazio('alert', 'Não foi possível carregar as etapas.'); });
+  desenhar();
+  const off = aoMudar(() => { if (!gravando && !iniciado) desenhar(); });
+  return () => { ativo = false; parar = true; off(); try { trava?.release(); } catch { /* ignora */ } };
 }

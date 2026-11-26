@@ -28,7 +28,7 @@ jobs:
 
       - name: Validar JSON de dados
         run: |
-          python3 -c "import json; json.load(open('data/dtc-db.json')); json.load(open('data/pids.json')); json.load(open('data/modo06.json')); print('JSON ok')"
+          python3 -c "import json; json.load(open('data/dtc-db.json')); json.load(open('data/pids.json')); json.load(open('data/modo06.json')); json.load(open('data/etapas-guiadas.json')); print('JSON ok')"
 
       - name: Node.js
         uses: actions/setup-node@v4
