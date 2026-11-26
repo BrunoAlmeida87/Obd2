@@ -8,7 +8,7 @@ import { apagarTudo } from '../storage.js';
 import { el, $, $$, icone, escHtml, modal, confirmar, toast, vazio, comCarregamento } from './dom.js';
 import { abrirDetalhe } from './dtc.js';
 import { horaMs, copiarTexto, baixarArquivo, carimbo } from '../util.js';
-import { coletarCompleto, coletarTecnico } from '../coleta.js';
+import { coletarCompleto, coletarTecnico, coletarCorrelacao } from '../coleta.js';
 import { gerarRelatorioHtml, gerarRelatorioCompletoHtml, abrirHtml } from './report.js';
 import { listarLeituras } from '../storage.js';
 import { comparar } from './history.js';
@@ -400,6 +400,7 @@ function telaAjuda(view) {
 // ------------------------------------------------------------------ relatórios
 function telaRelatorios(view) {
   let rodando = false;
+  let pararCorrel = false;
   const desenhar = (prog) => {
     const l = estado.ultimaLeitura;
     view.innerHTML = `
@@ -416,6 +417,12 @@ function telaRelatorios(view) {
         <p class="muted small">Dica: faça antes a <a href="#more/varredura">varredura completa</a>. Leva de 1 a 4 min. Só faz leituras.</p>
         <label class="switch"><span class="t"><b>Exploração profunda</b><small>Procura blocos de dados extras em cada módulo (21 00–FF e 22 B0xx/F1xx). Leva de 5 a 10 min. Só leitura.</small></span><input type="checkbox" id="chkProfundo"></label>
         <button class="btn block" id="btnRelTecnico" ${conectado() && !rodando ? '' : 'disabled'}>${icone('download')} Gerar relatório técnico</button></div>
+      <div class="card"><h3>${icone('record')} Gravação para decodificar dados</h3>
+        <p class="small">Grava ao mesmo tempo rotação, velocidade e temperaturas (conhecidas) e os blocos de dados do motor, câmbio, ABS, direção, carroceria e painel. Cruzando as duas coisas dá para descobrir o que cada bloco significa e ensinar o app a mostrar esses dados.</p>
+        <p class="small"><b>Como fazer:</b> comece parado com o motor ligado, toque em Gravar, deixe o celular preso no suporte e <b>dirija normalmente</b> (acelerar, frear, virar o volante, parar). Não mexa no celular dirigindo: a gravação para sozinha. Só leitura.</p>
+        <label class="field"><span>Duração</span><select class="input" id="selMinutos"><option value="3">3 minutos</option><option value="5" selected>5 minutos</option><option value="8">8 minutos</option></select></label>
+        <button class="btn block" id="btnCorrel" ${conectado() && !rodando ? '' : 'disabled'}>${icone('record')} Gravar</button>
+        ${rodando === 'correl' ? `<button class="btn danger block" id="btnPararCorrel" style="margin-top:8px">${icone('stop')} Parar agora e salvar</button>` : ''}</div>
       ${prog ? `<div class="card"><div class="small">${escHtml(prog.texto)}</div><div class="progress" style="margin-top:8px"><div style="width:${prog.pct}%"></div></div></div>` : ''}
       ${!conectado() ? '<p class="muted small center">Conecte ao carro (ou ao modo demo) para coletar.</p>' : ''}`;
 
@@ -442,6 +449,29 @@ function telaRelatorios(view) {
             { texto: 'Fechar', classe: 'ghost' },
             { texto: 'Baixar', icone: 'download', aoClicar: () => { baixarArquivo(nome, html, 'text/html;charset=utf-8'); return false; } },
             { texto: 'Abrir', classe: 'primary', icone: 'printer', aoClicar: () => { abrirHtml(html, nome); return false; } }
+          ]
+        });
+      } finally { if (rodando) { rodando = false; desenhar(); } }
+    }));
+
+    $('#btnPararCorrel', view)?.addEventListener('click', () => { pararCorrel = true; });
+    $('#btnCorrel', view)?.addEventListener('click', () => comCarregamento(null, async () => {
+      const minutos = Number($('#selMinutos', view).value) || 5;
+      rodando = 'correl';
+      pararCorrel = false;
+      try {
+        const rel = await coletarCorrelacao((texto, pct) => desenhar({ texto, pct }), { minutos, deveParar: () => pararCorrel });
+        const json = JSON.stringify(rel);
+        const nome = `gravacao-correlacao-${carimbo()}.json`;
+        rodando = false;
+        desenhar();
+        baixarArquivo(nome, json, 'application/json');
+        modal({
+          titulo: 'Gravação concluída',
+          conteudo: `<p>${rel.amostras.length} amostras em ${Math.round((rel.amostras.at(-1)?.t || 0) / 1000)} s. O arquivo <b>${escHtml(nome)}</b> foi baixado (pasta Downloads). Envie esse arquivo na conversa com o Claude.</p>`,
+          botoes: [
+            { texto: 'Fechar', classe: 'ghost' },
+            { texto: 'Baixar de novo', icone: 'download', aoClicar: () => { baixarArquivo(nome, json, 'application/json'); return false; } }
           ]
         });
       } finally { if (rodando) { rodando = false; desenhar(); } }

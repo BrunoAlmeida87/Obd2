@@ -1,7 +1,7 @@
 /* Service worker: guarda o app inteiro em cache para funcionar offline.
  * Estratégia: pré-cache de todos os arquivos na instalação;
  * navegação e arquivos do app = cache primeiro, atualizando em segundo plano. */
-const VERSION = 'cerato-obd-v1.2.0';
+const VERSION = 'cerato-obd-v1.3.0';
 
 const ARQUIVOS = [
   './',

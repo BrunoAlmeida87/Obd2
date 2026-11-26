@@ -83,6 +83,10 @@ Do relatório técnico de 26/11/2026 (adaptador ELM327 v1.5 clone, CAN 11 bit 50
 | 7B3 → 7BB | Ar-condicionado (provável) | só 3E 00 | — |
 | 7F1 → 7F9 | desconhecido | responde com NRC 22 | — |
 
+Formatos de leitura de códigos aceitos (exploração profunda de 26/11/2026): motor, câmbio, ABS e direção aceitam KWP2000 `18 00 FF 00`; carroceria e painel aceitam UDS `19 02 08`; caixa de junção aceita `19 02 08/09`. Airbag, ar-condicionado e o módulo 7F1 recusaram todos os formatos testados (NRC 11). O painel não responde a pedidos que não reconhece (fica calado em vez de responder NRC).
+
+Blocos de dados encontrados (significado dos bytes ainda em decodificação): motor `21 00–02, 13–1B, 80–81, 8A–8D, 90–99, F1–F2`; câmbio `21 90, A0, A1, A3`; ABS `21 01–02`; direção `21 00–01, 06, 20–22, 80–84, 92–99, B0, F0–FF`; carroceria `22 B001–B009, B0BA`; painel `22 B001–B003`.
+
 PIDs do modo 01 suportados pelo motor: 01 03 04 05 06 07 0B 0C 0D 0E 0F 11 13 14 15 1C 1F 21 2E 2F 30 31 33 3C 41–47 49 4A 4C 4F 56. O PID 52 (teor de etanol) **não** é informado por este carro. O modo 06 informa testes de sondas, catalisador, comando variável, purga do canister e aquecedores das sondas.
 
 ## Arquitetura

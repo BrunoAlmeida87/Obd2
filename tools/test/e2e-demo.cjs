@@ -206,6 +206,19 @@ const SHOTS = process.argv[3] || null;
     await page.click('.modal .btn.ghost');
   });
 
+  await passo('Gravação de correlação (parada antes do fim)', async () => {
+    await page.click('[data-tab="more"]');
+    await page.click('[data-sub="relatorios"]');
+    await page.selectOption('#selMinutos', '3');
+    await page.click('#btnCorrel');
+    await page.waitForSelector('#btnPararCorrel', { timeout: 10000 });
+    await page.waitForTimeout(6000);
+    const [down] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#btnPararCorrel')]);
+    const rel = JSON.parse(require('fs').readFileSync(await down.path(), 'utf8'));
+    if (rel.tipo !== 'gravacao-correlacao' || rel.amostras.length < 1 || !('0C' in rel.amostras[0].obd)) throw new Error('gravação vazia');
+    await page.click('.modal .btn.ghost');
+  });
+
   await passo('Persistência após recarregar', async () => {
     await page.reload();
     await page.click('[data-tab="history"]');

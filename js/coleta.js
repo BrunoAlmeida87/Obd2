@@ -10,7 +10,7 @@ import { salvarLeitura } from './storage.js';
 import { parsearMensagens } from './elm327.js';
 import { horaMs } from './util.js';
 
-export const VERSAO_APP = '1.2.0';
+export const VERSAO_APP = '1.3.0';
 const hex2 = (n) => n.toString(16).toUpperCase().padStart(2, '0');
 
 async function tentar(fn, padrao = null) {
@@ -253,4 +253,60 @@ export async function coletarTecnico(progresso = () => {}, opcoes = {}) {
   };
   progresso('Pronto.', 100);
   return rel;
+}
+
+// ===================================================================== correlação
+/**
+ * Grava, em ciclo, PIDs OBD conhecidos (rotação, velocidade, temperaturas...) junto com
+ * todos os blocos de dados dos módulos. Cruzando as duas séries dá para descobrir o que
+ * cada byte dos blocos significa. Somente leitura.
+ */
+export async function coletarCorrelacao(progresso = () => {}, { minutos = 3, deveParar = () => false } = {}) {
+  exigirConexao();
+  const { elm, obd } = estado;
+  const { BLOCOS_CONHECIDOS } = await import('./kia.js');
+  const pidsObd = ['0C', '0D', '05', '0F', '11', '04', '0B', '0E', '42', '2F', '46', '14', '15'].filter((p) => obd.suporta(p));
+  const hexs = (b) => b.map((x) => x.toString(16).toUpperCase().padStart(2, '0')).join('');
+  // módulos KWP2000 aceitam a sessão 10 81 (não é obrigatória, mas mantém o módulo atento)
+  for (const b of BLOCOS_CONHECIDOS) {
+    if (b.cmds[0].startsWith('21')) await elm.comando('1081', { alvo: { tx: b.tx, rx: b.rx }, tentativas: 0, timeout: 1500 });
+  }
+  const inicio = Date.now();
+  const fim = inicio + minutos * 60000;
+  const amostras = [];
+  // mantém a tela ligada: com a tela apagada o Chrome pausa o Bluetooth
+  let trava = null;
+  try { trava = await navigator.wakeLock?.request('screen'); } catch { /* sem wake lock */ }
+  try {
+    while (Date.now() < fim && !deveParar()) {
+      const a = { t: Date.now() - inicio, obd: {}, blocos: {} };
+      const r = await tentar(() => obd.lerPids(pidsObd), new Map());
+      r.forEach((v, pid) => { if (typeof v.valor === 'number') a.obd[pid] = Math.round(v.valor * 1000) / 1000; });
+      for (const b of BLOCOS_CONHECIDOS) {
+        for (const c of b.cmds) {
+          if (deveParar()) break;
+          const resp = await elm.pedir(c, { alvo: { tx: b.tx, rx: b.rx }, tentativas: 0, timeout: 1500 });
+          const m = resp.msgs.find((x) => x.dados[0] !== 0x7f);
+          a.blocos[`${b.tx}:${c}`] = m ? hexs(m.dados) : null;
+        }
+      }
+      amostras.push(a);
+      const seg = Math.round((Date.now() - inicio) / 1000);
+      progresso(`Gravando: amostra ${amostras.length} · ${seg} s de ${minutos * 60} s`, Math.min(99, Math.round((seg / (minutos * 60)) * 100)));
+    }
+  } finally {
+    try { await trava?.release(); } catch { /* ignora */ }
+    await elm.restaurarPadrao();
+  }
+  return {
+    app: 'cerato-obd',
+    tipo: 'gravacao-correlacao',
+    versao_app: VERSAO_APP,
+    data: new Date(inicio).toISOString(),
+    vin: estado.vin,
+    minutos,
+    pidsObd,
+    blocos: BLOCOS_CONHECIDOS,
+    amostras
+  };
 }

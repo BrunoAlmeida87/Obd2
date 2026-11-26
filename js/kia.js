@@ -33,6 +33,20 @@ export const MODULOS_PADRAO = [
   { id: 'm7f1', nome: 'Módulo 7F1 (desconhecido)', tx: '7F1', rx: '7F9', critico: false, nota: 'Responde; função desconhecida' }
 ];
 
+/**
+ * Blocos de dados que cada módulo deste Cerato aceitou na exploração profunda
+ * (KWP2000 21 xx e UDS 22 xxxx). O significado de cada byte ainda é desconhecido:
+ * é isso que a gravação de correlação ajuda a descobrir.
+ */
+export const BLOCOS_CONHECIDOS = [
+  { tx: '7E0', rx: '7E8', nome: 'Motor', cmds: ['2100', '2101', '2102', '2113', '2114', '2115', '2116', '2117', '2118', '2119', '211A', '211B', '2180', '2181', '218A', '218B', '218C', '218D', '2190', '2191', '2192', '2194', '2195', '2198', '2199', '21F1', '21F2'] },
+  { tx: '7E1', rx: '7E9', nome: 'Câmbio', cmds: ['2190', '21A0', '21A1', '21A3'] },
+  { tx: '7D1', rx: '7D9', nome: 'ABS', cmds: ['2101', '2102'] },
+  { tx: '7D4', rx: '7DC', nome: 'Direção', cmds: ['2100', '2101', '2106', '2120', '2121', '2122', '2180', '2181', '2182', '2183', '2184', '2192', '2193', '2194', '2197', '2198', '2199', '21B0', '21F0', '21F1', '21FC', '21FD', '21FE', '21FF'] },
+  { tx: '7A0', rx: '7A8', nome: 'Carroceria (BCM)', cmds: ['22B001', '22B002', '22B003', '22B004', '22B005', '22B006', '22B007', '22B008', '22B009'] },
+  { tx: '7C6', rx: '7CE', nome: 'Painel', cmds: ['22B001', '22B002', '22B003'] }
+];
+
 /** Códigos de resposta negativa (NRC) — ISO 14229 (UDS) / ISO 14230 (KWP2000). */
 export const NRC = {
   0x10: 'Recusa geral',
@@ -163,6 +177,7 @@ export class Kia {
       if (algumaResposta) this._iniciarTesterPresent(mod);
 
       // ---- UDS 19 02: alguns módulos recusam a máscara FF (NRC 31) e aceitam 09/08/0D
+      // (o painel deste carro fica calado para máscaras que não aceita, por isso não para no silêncio)
       for (const cmd of ['1902FF', '190209', '190208', '19020D']) {
         const r = await pedir(cmd, { timeout: 4000 });
         const ok = r.msgs.find((m) => m.dados[0] === 0x59);
@@ -179,11 +194,12 @@ export class Kia {
         }
         neg = this._negativa(r.msgs, 0x19);
         anota(`UDS ${espacado(cmd)}: ${neg !== null ? traduzirNrc(neg) + ` (0x${hex2(neg)})` : 'sem resposta'}.`);
-        if (neg === null || neg === 0x11) break; // serviço inexistente ou módulo calado: não adianta variar
+        if (neg === 0x11) break; // serviço inexistente: não adianta variar
       }
 
       // ---- KWP2000 18: variantes de status/grupo (NRC 12 = formato não aceito)
-      for (const cmd of ['1802FF00', '1800FF00', '18020000', '18000000']) {
+      // 18 00 FF 00 foi o formato aceito por motor, câmbio, ABS e direção do Cerato 2014
+      for (const cmd of ['1800FF00', '1802FF00', '18000000', '18020000']) {
         const r = await pedir(cmd, { timeout: 4000 });
         const ok = r.msgs.find((m) => m.dados[0] === 0x58);
         if (ok) {
@@ -199,7 +215,7 @@ export class Kia {
         }
         neg = this._negativa(r.msgs, 0x18);
         anota(`KWP ${espacado(cmd)}: ${neg !== null ? traduzirNrc(neg) + ` (0x${hex2(neg)})` : 'sem resposta'}.`);
-        if (neg === null || neg === 0x11) break;
+        if (neg === 0x11 || (neg === null && !algumaResposta)) break;
       }
 
       if (!algumaResposta) {
