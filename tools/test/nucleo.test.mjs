@@ -71,6 +71,22 @@ await teste('Identificação real dos módulos (ABS, BCM, ECM)', () => {
   const [vin] = parsearMensagens(['7E810144902014B4E41', '7E821465A3431344245', '7E82235303631373638'], 6);
   assert.equal(String.fromCharCode(...vin.dados.slice(3)), 'KNAFZ414BE5061768');
 });
+await teste('Bloco real do câmbio 21 A0: marcha, turbina, saída e patinação', async () => {
+  const obd = new Obd({ ehCan: true, pedir: async () => ({ msgs: [] }) }, tabela);
+  const dados = (hex) => hex.match(/../g).map((x) => parseInt(x, 16));
+  const dec = (pid, hex) => tabela.get(pid).fnBloco(dados(hex));
+  const a27kmh = '61A0FFFF000011401C0D0013000DA87005700640BE00080404FFC1C0FF00';
+  const a47kmh = '61A0FFFF00001784311003178C17887203E80800C007080515FFC0C0FF00';
+  assert.equal(dec('TM1', a27kmh), 4);
+  assert.equal(dec('TM2', a27kmh), 1.392);
+  assert.equal(dec('TM3', a27kmh), 1216);
+  assert.ok(Math.abs(dec('TM3', a27kmh) / dec('TM4', a27kmh) - 1.392) < 0.01, 'relação turbina/saída = 4ª marcha');
+  assert.equal(dec('TM1', a47kmh), 5);
+  assert.ok(Math.abs(dec('TM5', a47kmh)) < 30, 'conversor travado em 5ª: patinação perto de zero');
+  assert.equal(dec('TM6', a27kmh), 72);
+  obd.suportados.set('7E9', new Set(['01']));
+  assert.equal(obd.suporta('TM1'), true);
+});
 await teste('PID 56 de 1 byte (como o Cerato responde)', () => {
   const r = new Map();
   new Obd({ ehCan: true }, tabela)._decodificarMulti([0x56, 0xc8], '7E8', r);
@@ -140,6 +156,11 @@ for (const ruidoso of [false, true]) {
     assert.equal(await obd.lerVin(), 'KNAFX411BE5000000');
     assert.equal((await obd.lerCalibracao())[0].calid, 'DEMO-CAL-GAMMA16');
     assert.equal((await obd.lerCvn())[0].cvn, '3A5C910E');
+  });
+  await teste('Dados do câmbio (bloco 7E1 21 A0) junto com PIDs OBD', async () => {
+    const r = await obd.lerPids(['0C', 'TM1', 'TM3', 'TM6', '05']);
+    assert.ok(r.has('0C') && r.has('05') && r.has('TM1') && r.has('TM3'));
+    assert.ok(r.get('TM1').valor >= 1 && r.get('TM1').valor <= 6);
   });
   await teste('Leitura multi-PID ao vivo', async () => {
     const r = await obd.lerPids(['0C', '0D', '05', '0F', '0B', '11', '04', '0E', '14', '52', 'RV']);

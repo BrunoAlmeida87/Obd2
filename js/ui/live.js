@@ -332,7 +332,7 @@ function escolherPids() {
   const htmlLista = Object.entries(grupos).map(([g, itens]) => `<div class="section-title">${escHtml(g)}</div><div class="pid-pick">${itens.map((p) => {
     const sup = !conhecido || obd.suporta(p.pid);
     return `<label class="${sup ? '' : 'unsupported'}"><input type="checkbox" value="${p.pid}" ${atuais.has(p.pid) ? 'checked' : ''} ${sup ? '' : 'disabled'}>
-      <span><b>${escHtml(p.nome)}</b><br><span class="muted small">PID ${p.pid === 'RV' ? 'ATRV' : '01 ' + p.pid}${p.unidade ? ' · ' + escHtml(p.unidade) : ''}${sup ? '' : ' · não suportado pelo carro'}</span></span></label>`;
+      <span><b>${escHtml(p.nome)}</b><br><span class="muted small">${p.pid === 'RV' ? 'ATRV' : p.fonte === 'modulo' ? 'Módulo ' + p.tx + ' · ' + p.cmd.match(/../g).join(' ') : 'PID 01 ' + p.pid}${p.unidade ? ' · ' + escHtml(p.unidade) : ''}${sup ? '' : ' · não suportado pelo carro'}</span></span></label>`;
   }).join('')}</div>`).join('');
   modal({
     titulo: 'Escolher PIDs',

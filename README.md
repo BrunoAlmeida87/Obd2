@@ -87,6 +87,8 @@ Formatos de leitura de códigos aceitos (exploração profunda de 26/11/2026): m
 
 Blocos de dados encontrados (significado dos bytes ainda em decodificação): motor `21 00–02, 13–1B, 80–81, 8A–8D, 90–99, F1–F2`; câmbio `21 90, A0, A1, A3`; ABS `21 01–02`; direção `21 00–01, 06, 20–22, 80–84, 92–99, B0, F0–FF`; carroceria `22 B001–B009, B0BA`; painel `22 B001–B003`.
 
+Decodificado por correlação (gravação rodando, 26/11/2026), bloco do câmbio `7E1 21 A0` (b[0] = 0x61): b[6..7]/4 = rotação do motor; b[8] = velocidade (km/h); b[11..12]/4 = rotação da turbina; b[13..14]/4 = rotação de saída; b[16..17]/1000 = relação da marcha engatada (4,400 / 2,726 / 1,834 / 1,392 / 1,000 / 0,774 → 1ª a 6ª); b[15] − 40 = provável temperatura do fluido (não confirmada). Motor `7E0 21 01`: b[9] + b[10]·256 / 4 = rotação; b[35]·0,75 − 48 = temperatura do ar de admissão. ABS `7D1 21 01`: b[16] = velocidade (km/h). O valor do painel `22 B002` **não** é o hodômetro (oscila durante a viagem). Script da análise: `tools/analise/correlacao.py`.
+
 PIDs do modo 01 suportados pelo motor: 01 03 04 05 06 07 0B 0C 0D 0E 0F 11 13 14 15 1C 1F 21 2E 2F 30 31 33 3C 41–47 49 4A 4C 4F 56. O PID 52 (teor de etanol) **não** é informado por este carro. O modo 06 informa testes de sondas, catalisador, comando variável, purga do canister e aquecedores das sondas.
 
 ## Arquitetura

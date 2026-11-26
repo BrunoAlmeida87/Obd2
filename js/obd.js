@@ -20,13 +20,21 @@ export function compilarFormula(f) {
   return new Function('A', 'B', 'C', 'D', `return (${f});`);
 }
 
+/** Fórmula sobre os bytes de um bloco de módulo: b[0] = SID positivo (ex.: 0x61), b[1] = id do bloco... */
+export function compilarFormulaBloco(f) {
+  if (!/^[\sb\[\]0-9+\-*/().?:<>=!&|]+$/.test(f)) throw new Error('Fórmula de bloco inválida: ' + f);
+  // eslint-disable-next-line no-new-func
+  return new Function('b', `return (${f});`);
+}
+
 export class TabelaPids {
   constructor(json) {
     this.json = json;
     this.porPid = new Map();
     for (const p of json.pids) {
       const item = { ...p };
-      if (p.formula) item.fn = compilarFormula(p.formula);
+      if (p.fonte === 'modulo') item.fnBloco = compilarFormulaBloco(p.formula);
+      else if (p.formula) item.fn = compilarFormula(p.formula);
       if (p.extra?.formula) item.extraFn = compilarFormula(p.extra.formula);
       this.porPid.set(p.pid, item);
     }
@@ -124,7 +132,13 @@ export class Obd {
     return this.suportadosUniao;
   }
 
-  suporta(pid) { return pid === 'RV' || this.suportadosUniao.has(pid); }
+  suporta(pid) {
+    if (pid === 'RV') return true;
+    const def = this.tab.get(pid);
+    // dados de módulo: só se a central exigida respondeu ao OBD (ex.: câmbio automático = 7E9)
+    if (def?.fonte === 'modulo') return !def.exige || this.suportados.has(def.exige);
+    return this.suportadosUniao.has(pid);
+  }
 
   /**
    * Lê vários PIDs do modo 01. Em CAN usa pedidos com até 6 PIDs (mais rápido).
@@ -132,7 +146,8 @@ export class Obd {
    */
   async lerPids(pids) {
     const resultado = new Map();
-    const lista = pids.filter((p) => p !== 'RV' && this.tab.get(p));
+    const lista = pids.filter((p) => p !== 'RV' && this.tab.get(p) && this.tab.get(p).fonte !== 'modulo');
+    await this._lerBlocosModulo(pids.filter((p) => this.tab.get(p)?.fonte === 'modulo'), resultado);
     const grupoMax = this.multiPid && this.elm.ehCan ? 6 : 1;
     for (let i = 0; i < lista.length; i += grupoMax) {
       const grupo = lista.slice(i, i + grupoMax);
@@ -157,6 +172,30 @@ export class Obd {
       if (v !== null) resultado.set('RV', { valor: v, texto: formatarNumero(v, 1), ecu: 'ELM' });
     }
     return resultado;
+  }
+
+  /** Dados vindos de blocos dos módulos (ex.: câmbio 7E1 21 A0): um pedido por bloco. */
+  async _lerBlocosModulo(pids, saida) {
+    const porBloco = new Map();
+    for (const pid of pids) {
+      const d = this.tab.get(pid);
+      const k = `${d.tx}:${d.cmd}`;
+      if (!porBloco.has(k)) porBloco.set(k, []);
+      porBloco.get(k).push(d);
+    }
+    for (const defs of porBloco.values()) {
+      const { tx, rx, cmd } = defs[0];
+      const r = await this.elm.pedir(cmd, { alvo: { tx, rx }, tentativas: 0, timeout: 1500 });
+      const sid = parseInt(cmd.slice(0, 2), 16) + 0x40;
+      const m = r.msgs.find((x) => x.dados[0] === sid);
+      if (!m) continue;
+      for (const d of defs) {
+        let valor = null;
+        try { valor = d.fnBloco(m.dados); } catch { valor = null; }
+        if (typeof valor !== 'number' || Number.isNaN(valor)) continue;
+        saida.set(d.pid, { valor, texto: formatarNumero(valor, d.casas), ecu: rx, bytes: m.dados });
+      }
+    }
   }
 
   /** Percorre a resposta "PID dados PID dados ..." usando o tamanho de cada PID da tabela. */

@@ -454,6 +454,16 @@ export class SimulatorTransport extends BaseTransport {
     } else if (sid === 0x14) {
       m.dtcs = [];
       p = m.proto === 'uds' ? [0x54] : [0x54, 0xff, 0x00];
+    } else if (sid === 0x21 && bytes[1] === 0xa0 && tx === 0x7e1) {
+      // bloco do câmbio no mesmo formato do Cerato real: marcha, turbina, saída, ATF
+      const e = this._estado();
+      const rel = [4400, 2726, 1834, 1392, 1000, 774];
+      const g = e.vel < 2 ? 0 : e.vel < 15 ? 0 : e.vel < 28 ? 1 : e.vel < 40 ? 2 : e.vel < 55 ? 3 : 4;
+      const motor = Math.round(e.rpm * 4);
+      const turbina = Math.round((e.vel < 2 ? 0 : e.rpm * 0.97) * 4);
+      const saida = Math.round(turbina / (rel[g] / 1000));
+      const w = (n) => [(n >> 8) & 0xff, n & 0xff];
+      p = [0x61, 0xa0, 0xff, 0xff, 0, 0, ...w(motor), Math.round(e.vel), 0x0d, 0, ...w(turbina), ...w(saida), 112, ...w(rel[g]), 8, 100, 190, 0, 8, 4, 4, 0xff, 0xc1, 0xc0, 0xff, 0];
     } else if (sid === 0x1a && bytes[1] === 0x80 && m.idKwp) {
       p = [0x5a, 0x80, ...[...m.idKwp].map((c) => c.charCodeAt(0))];
     } else if (sid === 0x22 && bytes[1] === 0xf1 && bytes[2] === 0x87 && m.pecaUds) {
